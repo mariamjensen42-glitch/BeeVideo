@@ -1,0 +1,27 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# release 签名密钥：绝不能进版本库
+keys/
+*.jks
+*.keystore
+
+# WorkBuddy 的项目内状态目录：脚本进版本库，体积大的构建产物与临时抓包不进
+# （m3classes.jar 4.5MB 是反查 material3 参数名用的；*.txt 是它 javap 出来的临时文本）
+.workbuddy/scripts/*.jar
+.workbuddy/scripts/*.txt
+.workbuddy/scripts/api/
+.workbuddy/scripts/_*

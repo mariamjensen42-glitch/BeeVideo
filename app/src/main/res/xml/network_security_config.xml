@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ⚠️ 为什么必须开 cleartextTrafficPermitted
+
+  targetSdk ≥ 28 起，Android 默认**拒绝所有明文 HTTP**，抛的是
+  `CLEARTEXT communication to … not permitted by network security policy`。
+  实测就是这样：填好地址点装载，界面红字报上面那句。
+
+  这不是"为了 mock 服务方便"才开的口子 —— 相当一部分点播源站**只有 http**，
+  没有 https。对本项目来说，用户填进来的地址是他自己的选择，App 没有立场
+  替他拒绝；禁掉的结果是这个来源直接不可用，而且报错信息跟"地址对不对"
+  完全无关，用户根本猜不到原因。
+
+  ⚠️ 这里**没有**退回 `android:usesCleartextTraffic="true"`（作用等价）：
+  用配置文件是为了以后要做「只对某个域名开口」时有个明确的落点，
+  而不是又去翻 manifest。
+
+  只信任系统根证书（不额外信任用户证书）：播放这类场景没必要放开用户证书，
+  放开反而扩大了中间人攻击面。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

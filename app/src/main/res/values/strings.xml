@@ -1,0 +1,88 @@
+<resources>
+    <string name="app_name">BeeVideo</string>
+
+    <!-- 通用 -->
+    <string name="action_back">返回</string>
+    <string name="action_retry">重试</string>
+    <string name="cd_back">返回</string>
+    <string name="cd_close">关闭</string>
+    <string name="dialog_close">关闭</string>
+
+    <!-- 顶层导航 -->
+    <string name="nav_home">首页</string>
+    <string name="nav_keep">收藏</string>
+    <string name="nav_settings">设置</string>
+
+    <!-- 首页 -->
+    <string name="home_brand">BeeVideo</string>
+    <string name="home_featured_label">精选</string>
+    <string name="home_featured_index">%1$02d/%2$02d</string>
+    <!-- 元信息（评分/年代/状态）由 MetaLine.kt 拼，不用位置占位符 —— 缺字段时
+         格式串会留下没有数值的「分 ·」。 -->
+    <string name="vod_score_suffix">%1$s 分</string>
+    <string name="home_section_count">%1$d 部</string>
+    <!-- 「推荐」这一位的名称由界面给，数据层只返回 id（见 VodContentRepository） -->
+    <string name="home_category_recommend">推荐</string>
+    <string name="home_loading">正在读取…</string>
+    <string name="home_load_failed">读取失败：%1$s</string>
+    <string name="home_category_empty">这个分类下暂时没有内容</string>
+
+    <!-- 未配置 / 装载失败（整页提示） -->
+    <string name="home_no_source_title">还没有配置内容源</string>
+    <string name="home_no_source_body">BeeVideo 不内置、不推荐、不分发任何内容源。在设置里填入你自己的配置地址后即可使用。</string>
+    <string name="home_go_settings">去设置</string>
+    <string name="home_retry">重试</string>
+    <string name="home_source_failed_title">内容源装载失败</string>
+
+    <!-- 收藏 -->
+    <string name="keep_title">收藏</string>
+    <string name="keep_empty_title">还没有收藏</string>
+    <string name="keep_empty_body">收藏能力尚未实现，当前版本只提供内容源的浏览与播放。</string>
+
+    <!-- 设置 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_source">内容源</string>
+    <string name="settings_source_body">BeeVideo 不内置、不推荐、不分发任何内容源。填入你自己持有的配置地址（站点配置或单站点接口地址均可）。</string>
+    <string name="settings_source_label">配置地址</string>
+    <string name="settings_source_placeholder">https://…</string>
+    <string name="settings_source_load">装载</string>
+    <string name="settings_source_clear">清除</string>
+    <string name="settings_source_loading">正在读取配置…</string>
+    <string name="settings_source_active">当前来源</string>
+    <string name="settings_section_about">关于</string>
+    <string name="settings_about_body">BeeVideo 是一个播放器外壳，只负责播放与本地媒体管理，覆盖范围是视频点播与本地播放。</string>
+
+    <!-- 详情 -->
+    <string name="detail_not_found">条目不存在</string>
+    <string name="detail_loading">正在读取详情…</string>
+    <string name="detail_load_failed">读取详情失败：%1$s</string>
+    <string name="detail_section_lines">播放线路</string>
+    <string name="detail_section_episodes">选集 · 共 %1$d 集</string>
+    <string name="detail_director">导演 %1$s</string>
+    <string name="detail_actors">主演 %1$s</string>
+
+    <!-- 播放 -->
+    <string name="player_fallback_title">播放</string>
+    <string name="player_no_episode">无可播放剧集</string>
+    <string name="player_line">线路：%1$s</string>
+    <string name="player_prev">上一集</string>
+    <string name="player_next">下一集</string>
+    <string name="player_section_episodes">选集</string>
+    <string name="player_url_placeholder">—</string>
+    <string name="player_resolving">正在解析播放地址…</string>
+    <string name="player_resolve_failed">取播放地址失败：%1$s</string>
+    <string name="player_resolve_empty">这个源没有给出可播放的地址</string>
+    <string name="player_parse_required">该地址是网页而非媒体流，需要第三方解析服务。本播放器不内置解析服务。</string>
+    <string name="player_error">播放出错：%1$s</string>
+
+    <!-- 播放信息对话框 -->
+    <string name="player_action_info">播放信息</string>
+    <string name="player_info_title">播放信息</string>
+    <string name="player_info_line">线路</string>
+    <string name="player_info_episode">剧集</string>
+    <string name="player_info_url">地址</string>
+    <string name="player_info_state">状态</string>
+    <string name="player_state_buffering">缓冲中</string>
+    <string name="player_state_ready">就绪</string>
+    <string name="player_state_error">出错</string>
+</resources>
