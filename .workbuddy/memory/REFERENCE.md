@@ -203,8 +203,10 @@ Kotlin 会给非空参数插 `Intrinsics.checkNotNullParameter`，param 写成 `
 ## 发布构建（2026-09-16 首次出包）
 
 ### 产物
-- `app-release.apk` **5.16 MB**（classes.dex 4.58 MB + resources.arsc 0.35 MB + res 54 KB）
-- 对比 debug **75.46 MB** → 压掉 **93.2%**。两个大头：R8 去死代码 + 资源收缩，
+- `app-release.apk` **5.54 MB**（classes.dex 4.95 MB + resources.arsc 0.35 MB + res 54 KB）
+  —— 补上 `-keep okhttp3/okio` 之后比最初多了 **0.36 MB**（4,580,448 → 4,951,348 字节的 dex）。
+  这笔钱换来「jar 源能用」，MVP 阶段不该犹豫。
+- 对比 debug **75.46 MB** → 压掉 **92.7%**。大头：R8 去死代码 + 资源收缩，
   以及 `material-icons-extended` 里 99% 的图标被删掉。
 - release 是 **1 个 dex**（debug 17 个）—— R8 会把 multidex 合并回单个。
 
@@ -242,8 +244,79 @@ release {
   - `-dontobfuscate` → 防**改名**。jar 的字节码里写死
     `superclass = Lcom/github/catvod/crawler/Spider;`，改名即撕毁契约。
     keep 规则**管不了删除以外的改名**，反过来也不行。
+- **第三条**：`-keep class okhttp3.** { *; }` / `-keep class okio.** { *; }`
+  → 第三方库的公开 ABI 同样是契约。见下一节。
 - `-keepattributes Signature` 必须留：R8 默认删掉它，删了之后 Gson 拿不到泛型
   →「能请求、能返回、解析出来全是空对象」。
+
+### ⚠️ R8 削掉第三方库的 ABI —— 首次装机真实源时暴露的最严重问题
+
+第一版 release 装的当天就炸了。**症状极具迷惑性**：
+
+| 现象 | |
+|---|---|
+| 配置装载 | 正常，86 个来源全列出来 |
+| 站点列表 / 首页骨架 | 正常 |
+| **真正取数据** | **进程 FATAL** |
+
+崩溃栈**全在 jar 自己的混淆类里**（`com.github.catvod.spider.merge.*`），
+看着像「这个 jar 版本不对」：
+
+```
+NoSuchMethodError: No direct method <init>(IJLjava/util/concurrent/TimeUnit;)V
+    in class Lokhttp3/ConnectionPool   （declaration ... appears in base.apk）
+NoSuchMethodError: No virtual method url(Ljava/lang/String;)Lokhttp3/Request$Builder;
+    in class Lokhttp3/Request$Builder
+```
+
+**不是版本问题**：`javap` 直接查 `okhttp-4.12.0.jar`，
+`public okhttp3.ConnectionPool(int, long, TimeUnit)` 与
+`public okhttp3.Request$Builder url(java.lang.String)` **都在**。
+是**我们自己包里的 OkHttp 被 R8 削了**。
+
+##### 判据
+差分比对（`verify_release.py` 的 1b 段，或技能 `android-release-abi-diff`）：
+
+| 类 | debug | release（修前） |
+|---|---|---|
+| `com/google/gson/Gson` 的锚点方法 | 21 | **21** ✅ |
+| `com/github/catvod/crawler/Spider` | 4 | **4** ✅ |
+| `okhttp3/ConnectionPool.<init>` | 3 | **0**（还多出 6 个别的类的构造器） |
+| `okhttp3/Request$Builder.url` | 3 | **1**（且返回类型变成 `V`） |
+| `okhttp3/OkHttpClient.newCall(Request)` | 1 | **0** |
+| `okio/Buffer.readUtf8/writeUtf8` | 6 | 3 |
+
+**Gson 一个没少、OkHttp 全废** —— 差别只有一个：**Gson 有 keep 规则，OkHttp 没有**。
+所以这不是「R8 对第三方库做了什么特殊处理」，就是**规则漏了**：
+`§1` 的 keep 只覆盖 `com.github.catvod.**`，第三方库成了规则真空地带。
+R8 只按本 App 的调用图判死活，而真正大范围调用 OkHttp/Okio 的是
+运行时才 `DexClassLoader` 进来的 jar —— 它看不见。
+
+`-keep class okhttp3.** { *; }` 生效后，`okhttp3/ConnectionPool` 多出来的那 6 个
+构造器（`<init>(Landroid/content/Context;)V`、`<init>(Lcoil/...)V`…）也一并消失，
+说明修前 R8 在做**类合并**（`$r8$classId` 字段就是它的标记）。
+
+##### ⚠️ 别拿 `usage.txt` 当「没被删」的证据
+`app/build/outputs/mapping/release/usage.txt`（`-printusage` 报告）里，
+`okhttp3.ConnectionPool` 只列了 `connectionCount` / `evictAll` / `idleConnectionCount`，
+**`<init>` 一个都没列** —— 可它确实不在包里。
+这类消失发生在**优化**阶段（内联 / 类合并），`-printusage` 不报告。
+**唯一可信的判据是差分比对。**
+
+##### `<clinit>` 是已知例外，改不了
+`okio.internal._ZlibJvmKt` 的方法留下了、`<clinit>` 被删（常量传播后变空）。
+- 想用规则堵：R8 的成员语法**不接受**裸 `<clinit>;` → `Expected char '('`；
+- 写成 `<clinit>();` 语法通过，但**依然被删**。
+→ 所以校验脚本把它单列成「已知例外」而不是失败。
+
+##### 顺带纠正：「要补 slf4j」这个判断是错的
+之前记过「真实 jar 命中 slf4j 7/7，值得补」。查权威宿主
+`FongMi/TV` 的 `catvod/build.gradle`：它的依赖是
+`api libs.bundles.okhttp / gson / guava / juniversalchardet / **api libs.logger** / sardine / smbj / zxing.core / brotli`，
+**`libs.logger` = `com.orhanobut:logger`，不是 slf4j**。
+宿主**没有**提供 slf4j 的义务，需要它的 jar 自己带。→ **不要加 slf4j。**
+（同一份文件也说明权威用的是 **okhttp 5.5.0**，我们钉的 4.12 偏旧但两个签名都有，
+够用；升级留作后续。）
 
 ### 资源改名：不是故障
 release 里找不到 `ic_launcher`，取而代之的是 `res/E4.xml` / `res/-6.webp` 这种。
@@ -253,11 +326,16 @@ release 里找不到 `ic_launcher`，取而代之的是 `res/E4.xml` / `res/-6.w
   `launchable-activity` 都在 → 图标和入口都正常。
 - ⚠️ 但**按名字查资源**（`getIdentifier`）会因此失效。当前代码里没有这种用法。
 
-### 产物校验：`verify_release.py <release.apk> <debug.apk>`
+### `verify_release.py <release.apk> <debug.apk>`
 判据是**差分**而不是手写期望清单 —— 手写清单会腐化，漏一项就放行一个静默故障。
 debug 是未优化的，拥有完整接口面；release 过完 R8。**两者差集必须为空。**
-检查四件事：
+检查五件事：
 1. `com/github/catvod/**` 的类与成员差分（应为空）
+1b. **`Lokhttp3/` `Lokio/` `Lcom/google/gson/` 的类与成员差分（应为空）**
+   —— 这一组是 2026-09-16 事故之后补的，也正是它抓出了事故。
+1c. 点名确认第三方锚点方法：`ConnectionPool.<init>(int,long,TimeUnit)`、
+   `Request$Builder.url(String)`、`OkHttpClient.newCall(Request)`、
+   `Buffer.readUtf8()/writeUtf8(String)`、`Gson.fromJson(String,Class)`
 2. 点名确认「只给 jar 用」的成员：`proxy` / `liveContent` / `action` /
    `manualVideoCheck` / `isVideoFormat` / `categoryContent` / `playerContent` /
    `initApi` / `client` / `safeDns` / `homeVideoContent` / `#siteKey`
@@ -265,9 +343,11 @@ debug 是未优化的，拥有完整接口面；release 过完 R8。**两者差�
 4. 签名（v1 的 META-INF 或 v2/v3 签名块）
 - ⚠️ R8 会把 lambda 合成类合并进宿主，留下 `*$$ExternalSyntheticLambda*`。
   它们消失是**优化生效**，必须排除，否则每次构建都报假警。
+- ⚠️ 删空的 `<clinit>` 单独列为「已知例外」，不计入失败（见上一节）。
 
-### `dex_probe.py` 的一个真 bug（本轮修掉）
-`method_idx_diff` / `field_idx_diff` 是**组内**增量，不是全局累计：
+### `dex_probe.py` / `abi_diff.py` 的两个真解析 bug（都是组内增量）
+
+**① `method_idx_diff` / `field_idx_diff` 是组内增量**，不是全局累计：
 DEX 把方法分成 direct 与 virtual、字段分成 static 与 instance **两个各自独立
 排序的组**，每组第一条 diff 都是「相对 0」。
 - 原来跨组连续累加 → 第二组 index 飘到 `method_ids_size` 之外 →
@@ -275,3 +355,13 @@ DEX 把方法分成 direct 与 virtual、字段分成 static 与 instance **两�
 - **只在同时拥有两组的类上炸**（R8 产物、`*_upgraded.jar`），
   在只含 virtual 的简单 jar 上完全正常 —— 所以之前被误判成「某些 jar 格式特殊」。
 - 修法：`for group_size in (direct, virtual): idx = 0`。
+
+**② `class_data_item` 的头是四个 uleb**：
+`static_fields_size` / `instance_fields_size` / `direct_methods_size` / `virtual_methods_size`。
+只读前两个就开始读字段，会把 `direct_methods_size` 当成第一个字段的 diff。
+- 症状同样是「名字飘掉」，但**方向相反**：字段名会跑成隔壁类甚至 `method_ids`
+  里的名字（字段里冒出 `<clinit>`、`ALPHA_8`、`packageName` 就是它）。
+- 这个 bug 是在写技能脚本时**自己踩的**（`dex_probe.class_fields` 没踩，它读全了四个）。
+- 教训：**解析器必须带自检** —— 逐条核对「读到的成员的主人是不是它所在的类」，
+  一旦对不上就中止并说明「解析器有 bug，别动 keep 规则」。
+  否则报告出来的是一句「差集不为空」，会把人骗去改 keep 规则，越改越远。
