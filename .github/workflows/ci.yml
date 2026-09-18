@@ -1,0 +1,122 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# BeeVideo · CI —— 每次改动都要过的那道门
+#
+# 三步，顺序就是「失败时的排查成本」从低到高：
+#
+#   1. JVM 单测        纯 JVM，几十秒，绝大多数回归死在这里
+#   2. debug + release 两个 APK 都编出来
+#   3. R8 差分校验      见下，本项目最贵的坑就藏在这一步
+#
+# ── 为什么 CI 要编 release（明明还没到发版）─────────────────────────────
+# 因为本项目的头号事故**只在 release 上出现**：R8 是在看不到运行时 jar 的前提下
+# 做删减的，会把 okhttp3 / okio / gson 里「本 App 从不直接调用」的成员当死代码删掉
+# —— 而真正大范围调用它们的是运行时才 `DexClassLoader` 进来的 csp jar。
+# 症状极具迷惑性：装载正常、站点列表正常、**一拉首页进程就 FATAL**，堆栈全在 jar
+# 自己的混淆类里（`NoSuchMethodError: ... okhttp3.ConnectionPool`），指不到真凶。
+#
+# ⚠️ 这道校验**不需要签名密钥** —— R8 的删减与签名毫无关系，未签名的 release APK
+#    拥有完整接口面，照样能差分。所以它放在这里而不是 release 流水线里：
+#    让「proguard-rules.pro 被误删」这种事在 PR 上就变红，而不是等发版才炸。
+#
+# 判据：debug（未优化，接口面完整）与 release（过完 R8）的差集必须为空。
+# 脚本：.workbuddy/scripts/verify_release.py（只用标准库，系统 python3 够）
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+# 同一分支连推两次，把上一次还在跑的那个掐掉 —— 它的结果已经过期了。
+# ⚠️ 这只对 CI 成立。发布流水线绝不能 cancel-in-progress，见 release.yml 的注释。
+#
+# ⚠️ 也**不要**加 paths-ignore（比如忽略 **.md）：被忽略的提交根本不产生 check run，
+#    如果仓库开了 branch protection 并把它设为 required status check，PR 会永远
+#    卡在 "Expected — Waiting for status to be reported"。文档改动的 CI 成本，
+#    比这个坑便宜得多。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 最小权限：CI 只需要读代码，不碰 Release。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 单测 + 构建 + R8 差分校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      # AGP 9.3.2 要求 JDK 17+，本项目本机用的是 jdk-21，两边对齐。
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: 安装 SDK 平台与构建工具
+        # ⚠️ 包名是 `android-37.1` 而不是 `android-37`：build.gradle.kts 用的是 AGP 9 的
+        #    compileSdk { version = release(37) { minorApiLevel = 1 } }，minor API level
+        #    会拼进平台目录名。装错版本的话报错是「Failed to find target with hash string」，
+        #    看着像 SDK 坏了，其实是名字写短了。
+        # build-tools 显式装在本地验证过的 36.0.0；万一 AGP 想要别的版本，它会自己下载
+        # （sdkDownload 默认开启，且 setup-android 已经替你接受过 license）。
+        run: sdkmanager --install "platforms;android-37.1" "build-tools;36.0.0"
+
+      - name: 配置 Gradle
+        # 自带依赖缓存 + 配置缓存复用（gradle.properties 里 org.gradle.configuration-cache=true）。
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 授权 gradlew
+        # ⚠️ 仓库里 gradlew 的 mode 是 **100644**，Git 不会替你补执行位。
+        #    不 chmod 就是 "Permission denied"，而且报错出现在 Gradle 已经拉起之后，
+        #    看起来像 wrapper 自己坏了。根治办法是 `git update-index --chmod=+x gradlew`，
+        #    这里只是兜底。
+        run: chmod +x ./gradlew
+
+      - name: 单测 + 构建 debug/release
+        # ⚠️ 不要抄本机 .workbuddy/scripts/build_debug.py 里的 --no-daemon --max-workers=1：
+        #    那是为了绕开本机 WorkBuddy 沙箱的限制（PowerShell/cmd 都起不来 .bat），
+        #    CI 上没有这个约束，照抄只会白白拖慢构建。
+        run: |
+          ./gradlew \
+            :app:testDebugUnitTest \
+            :app:assembleDebug \
+            :app:assembleRelease \
+            --stacktrace
+
+      - name: R8 差分校验
+        env:
+          # 脚本会打中文，锁死编码避免 runner 上 locale 不测导致的 UnicodeEncodeError。
+          PYTHONIOENCODING: utf-8
+        run: |
+          # 用 find 而不是写死文件名：**没有签名配置时 AGP 产出的是
+          # `app-release-unsigned.apk`**，写了名字就会「文件不存在」。
+          REL=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          DBG=$(find app/build/outputs/apk/debug   -name '*.apk' | head -1)
+          echo "release: $REL"
+          echo "debug  : $DBG"
+          [ -n "$REL" ] && [ -n "$DBG" ] || { echo "::error::没找到 APK，上游构建其实没成功"; exit 1; }
+          python3 .workbuddy/scripts/verify_release.py "$REL" "$DBG"
+
+      - name: 上传单测报告
+        # always()：只有测试挂掉的时候，这份报告才有人看。
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/
+          retention-days: 7
+          if-no-files-found: ignore

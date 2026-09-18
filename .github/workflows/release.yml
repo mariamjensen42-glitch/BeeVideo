@@ -1,0 +1,273 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# BeeVideo · Release —— 打 tag 出正式包并挂到 GitHub Release
+#
+# 触发两条路：
+#   · push tag `v1.2.0`  → 完整流水线：构建 + 校验 + **创建 Release**
+#   · 手动 workflow_dispatch → **演练**：同样的构建和校验，但只产出 artifact，
+#                              不碰 Release。用来在不污染版本历史的前提下
+#                              验证 secrets / 签名 / R8 全链路。
+#
+# 顺序不是随便排的，每一步都在为下一步兜底：
+#
+#   单测 → 构建 → 验签 → R8 差分 → 打包 → 发布
+#                    ↑
+#              这两道是「编译通过但东西不能用」的专门克星
+#
+# ⚠️ 本流水线**必须**能拿到签名密钥。缺密钥时 build.gradle.kts 只会打一行 warning
+#    然后照常产出一个**未签名** APK —— 它大小正常、名字正常、装的时候才炸
+#    （INSTALL_PARSE_FAILED_NO_CERTIFICATES）。所以第一步就 fail fast。
+#
+# ⚠️ 密钥与密码只经由 GitHub Secrets 进来，任何一步都不要把它们 echo 到日志里 ——
+#    CI 日志对拥有仓库读权限的人是公开的，而 release 密钥一旦泄露，唯一的补救是
+#    换密钥，换密钥意味着所有已安装用户必须卸载重装（签名不同不能覆盖安装）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，如 1.2.0。手动触发是「演练」：构建 + 校验全跑，但不创建 Release。'
+        required: true
+        type: string
+
+# ⚠️ 发布流水线**绝不能** cancel-in-progress：在切到一半时掐掉，可能留下一个
+#    已创建却没有资产的 Release，或者更糟 —— 一个看起来发布成功、其实是空壳的版本。
+#    宁可让它跑完，也不要留下对不上账的 tag。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 创建 Release 需要写权限；这是本仓库唯一需要写权限的地方。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        # fetch-depth: 0 —— 让自动生成的 release notes 能看到完整提交历史。
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 解析版本号
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            IS_RELEASE=false
+          else
+            # tag 是 v1.2.0 这种带 v 前缀的写法，进 APK 的 versionName 不带 v。
+            VERSION="${GITHUB_REF_NAME#v}"
+            IS_RELEASE=true
+          fi
+
+          # 只接受 1 / 1.2 / 1.2.3。不校验的话，tag 写成 `v1.2` 也能过，
+          # 但算出来的 versionCode 与页面上写的版本号会对不上账。
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::版本号格式非法：'$VERSION'（应为 1 / 1.2 / 1.2.3 之一）"
+            exit 1
+          fi
+
+          IFS='.' read -ra PARTS <<< "$VERSION"
+          MAJOR=${PARTS[0]:-0}
+          MINOR=${PARTS[1]:-0}
+          PATCH=${PARTS[2]:-0}
+
+          # versionCode 必须**单调递增**，否则已装用户升不了级
+          # （系统只认 code，不认 name）。
+          # ⚠️ `10#` 前缀不能省：bash 会把前导 0 当八进制，`08` 会让整个脚本当场死掉。
+          CODE=$(( 10#$MAJOR * 10000 + 10#$MINOR * 100 + 10#$PATCH ))
+
+          {
+            echo "name=$VERSION"
+            echo "code=$CODE"
+            echo "release=$IS_RELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "### 版本 $VERSION（versionCode $CODE）" >> "$GITHUB_STEP_SUMMARY"
+          echo "演练模式：$([ "$IS_RELEASE" = false ] && echo 是 || echo 否)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 校验签名密钥已配置
+        # 放在最前面：没密钥的话后面每一步都会成功，最后产出一个装不上的包。
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PW: ${{ secrets.KEY_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          missing=()
+          [ -n "$KS_B64" ]   || missing+=("KEYSTORE_BASE64")
+          [ -n "$KS_PW" ]    || missing+=("KEYSTORE_PASSWORD")
+          [ -n "$KEY_PW" ]   || missing+=("KEY_PASSWORD")
+          [ -n "$KS_ALIAS" ] || missing+=("KEY_ALIAS")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::缺少 secrets：${missing[*]}。没有它们构建出的是未签名 APK，任何设备都装不上。"
+            echo "生成方式见仓库 README 的「发布」一节。" >&2
+            exit 1
+          fi
+          echo "四项签名 secrets 都在。"
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: 安装 SDK 平台与构建工具
+        # `android-37.1` 而不是 `android-37`：AGP 9 的 minorApiLevel 会拼进平台目录名。
+        run: sdkmanager --install "platforms;android-37.1" "build-tools;36.0.0"
+
+      - name: 配置 Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 解码签名密钥
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p keys
+          # ⚠️ 用 printf 而不是 echo：echo 对多行/带换行的输入在各 shell 上行为不一致，
+          #    解码出一堆垃圾字节后，报错是 "Keystore was tampered with, or password
+          #    was incorrect" —— 听着像密码错了，其实是解码错了。
+          printf '%s' "$KS_B64" | base64 -d > keys/beevideo-release.jks
+          ls -l keys/beevideo-release.jks
+
+      - name: 生成 local.properties
+        env:
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PW: ${{ secrets.KEY_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          # app/build.gradle.kts 从**根目录的** local.properties 读这四项。
+          # 该文件在 .gitignore 里，所以 CI 每次现生成一份，用完随 runner 一起销毁。
+          cat > local.properties <<EOF
+          sdk.dir=$ANDROID_SDK_ROOT
+          beevideo.keystore.file=$GITHUB_WORKSPACE/keys/beevideo-release.jks
+          beevideo.keystore.alias=$KS_ALIAS
+          beevideo.keystore.storePassword=$KS_PW
+          beevideo.keystore.keyPassword=$KEY_PW
+          EOF
+          # 只回显非密码行 —— CI 日志别的地方能看到。
+          grep -v -i password local.properties
+
+      - name: 取回 vendor JS 运行库
+        # ⚠️ 这一步不是可有可无的优化，是**正确性**问题。
+        #
+        # `app/src/main/assets/js/lib/` 下那四个第三方库（cat.js / cheerio.min.js /
+        # crypto-js.js / gbk.js）被 .gitignore 挡在版本库外（无 license 头的打包产物），
+        # 但 JS 爬虫引擎要按路径读它们。**全新 clone 的工作区里没有这四个文件**，
+        # 而缺了它们的构建不会报任何错 —— APK 一切正常、体积只小 1 MB，
+        # 直到用户打开一个 `.js` 源，JS 侧才报 "xxx is not a function"，
+        # 报错全在脚本里、指不到"宿主根本没打包那几个库"。
+        #
+        # 所以：拉不到就 fail。宁可发不出去，也不能发一个残的正式版。
+        #
+        # 资产位置：本仓库的一个独立 tag（默认 vendor-js-v1），文件名与 assets 里一致。
+        # 建/更新方式：
+        #     gh release create vendor-js-v1 \
+        #       app/src/main/assets/js/lib/cat.js \
+        #       app/src/main/assets/js/lib/cheerio.min.js \
+        #       app/src/main/assets/js/lib/crypto-js.js \
+        #       app/src/main/assets/js/lib/gbk.js \
+        #       --title "vendor JS runtime" --notes "JS 爬虫引擎的第三方运行库，不进源码树"
+        # ⚠️ 仓库若改为私有，这里要换成带 token 的下载方式（curl 会 404）。
+        env:
+          VENDOR_TAG: vendor-js-v1
+        run: |
+          DEST=app/src/main/assets/js/lib
+          BASE="https://github.com/${{ github.repository }}/releases/download/${VENDOR_TAG}"
+          for f in cat.js cheerio.min.js crypto-js.js gbk.js; do
+            printf '拉取 %-18s' "$f"
+            if curl -fsSL --retry 3 -o "$DEST/$f" "$BASE/$f"; then
+              echo "  $(stat -c%s "$DEST/$f") 字节"
+            else
+              echo
+              echo "::error::$f 拉取失败（$BASE/$f）。先按本文档顶部的 gh release create 建好 ${VENDOR_TAG}。"
+              exit 1
+            fi
+          done
+          # 反向校验：自家那三个文件必须还在 —— 证明 vendor 步骤没把别人的东西盖掉。
+          for own in http.js spider.js similarity.js; do
+            test -s "$DEST/$own" || { echo "::error::$own 不见了，vendor 步骤覆盖范围写错了"; exit 1; }
+          done
+          echo "--- assets/js/lib 最终内容 ---"
+          ls -l "$DEST"
+
+      - name: 授权 gradlew
+        # 仓库里 gradlew 的 mode 是 100644，没有执行位。
+        run: chmod +x ./gradlew
+
+      - name: 单测 + 构建（签名 release）
+        run: |
+          ./gradlew \
+            :app:testDebugUnitTest \
+            :app:assembleDebug \
+            :app:assembleRelease \
+            -Pbeevideo.versionName=${{ steps.version.outputs.name }} \
+            -Pbeevideo.versionCode=${{ steps.version.outputs.code }} \
+            --stacktrace
+
+      - name: 验证 APK 确实被签名
+        # ⚠️ 这步不能省。签名参数缺失时 AGP **只打一行 warning** 就继续，
+        #    产物大小与签过名的几乎一样，直到有人装上才发现装不了。
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "校验 $APK"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          echo "--- 证书 ---"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$APK"
+
+      - name: R8 差分校验
+        # 与 CI 同一道判据。放在发布链路上的理由很直接：CI 上跑的是**未签名**包，
+        # 而这里跑的是真正要发出去的那个 —— 万一签名/优化配置影响了 R8 的行为，
+        # 这里才是最后一道闸。
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          REL=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          DBG=$(find app/build/outputs/apk/debug   -name '*.apk' | head -1)
+          python3 .workbuddy/scripts/verify_release.py "$REL" "$DBG"
+
+      - name: 整理产物
+        id: artifacts
+        run: |
+          mkdir -p dist
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          OUT="dist/BeeVideo-${{ steps.version.outputs.name }}.apk"
+          cp "$APK" "$OUT"
+          ( cd dist && sha256sum "$(basename "$OUT")" > SHA256SUMS.txt )
+          cat dist/SHA256SUMS.txt
+          ls -lh dist/
+          echo "apk=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: BeeVideo-${{ steps.version.outputs.name }}
+          path: dist/
+          retention-days: 14
+
+      - name: 创建 GitHub Release
+        if: steps.version.outputs.release == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/BeeVideo-${{ steps.version.outputs.name }}.apk
+            dist/SHA256SUMS.txt
+          # 按 commit 自动生成变更列表；正文里不再手写版本号，免得两处不一致。
+          generate_release_notes: true
+          # 文件没匹配上就失败 —— 否则会出现「发布成功但资产是空的」。
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false

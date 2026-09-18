@@ -19,6 +19,31 @@ keys/
 *.jks
 *.keystore
 
+# ── 第三方 JS 运行库（JS 爬虫引擎依赖）─────────────────────────────────────
+# 这四个文件随 APK 一起分发，但**不进版本库**：它们都是打包好的产物、没有任何
+# license 头，许可来源不明，不适合出现在公开仓库的源码树里。
+#
+# ⚠️ 只能这样逐个文件列，**绝不能写成 `/js/lib/**` 或 `*.js`** —— 同一个目录下的
+#    `http.js` / `spider.js` / `similarity.js` 是本项目自己写的代码
+#    （`Asset.read("js/lib/http.js")` 直接按路径读），排掉它们 JS 引擎直接报废，
+#    而且症状是「`.js` 源一跑就报 xxx is not a function」，看着像源的问题。
+#
+# ⚠️ 代价必须写在这里，免得下次有人对着 CI 挠头：**全新 clone 的工作区没有这四个
+#    文件** → 在 CI 上构建出的 APK 缺 JS 爬虫支持。发布流水线里的 vendor 步骤
+#    负责把它们补回去，见 .github/workflows/release.yml。
+/app/src/main/assets/js/lib/cat.js
+/app/src/main/assets/js/lib/cheerio.min.js
+/app/src/main/assets/js/lib/crypto-js.js
+/app/src/main/assets/js/lib/gbk.js
+
+# 真机截图里带着真实内容源的站点名与推广二维码 —— 公开仓库里不能有这种东西，
+# 那等于变相推荐内容源，与本项目「不内置、不推荐、不分发」的红线直接冲突。
+# （文件保留在本地，只是不进版本库）
+/docs/screenshots/release-real-source-*.png
+
+# 临时日志与中间产物
+/.workbuddy/tmp/
+
 # WorkBuddy 的项目内状态目录：脚本进版本库，体积大的构建产物与临时抓包不进
 # （m3classes.jar 4.5MB 是反查 material3 参数名用的；*.txt 是它 javap 出来的临时文本）
 .workbuddy/scripts/*.jar
