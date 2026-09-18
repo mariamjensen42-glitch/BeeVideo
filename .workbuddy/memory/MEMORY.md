@@ -52,15 +52,26 @@ jar 调 `Proxy.getUrl(true)` 发 `http://127.0.0.1:<port>/proxy?do=m3u8&url=…`
 ⚠️ 引入 QuickJS 后 release 体积 **11.3 MB**（`libquickjs.so` × 4 ABI）——
 **上一轮 5.79 MB 的验收结论已作废，必须重跑。**
 
-## CI/CD（2026-09-18 落地；⚠️ 仓库**无 remote** → 一次都没在 GitHub 上跑过）
+## CI/CD（2026-09-18 落地并上线；仓库 = `github.com/mariamjensen42-glitch/BeeVideo`，**公开 + GPL-3.0**）
 `.github/workflows/{ci,release}.yml`；本地校验器 `.workbuddy/scripts/lint_workflows.py`
 （YAML 结构 + 把每个 run 块抠出来喂 `bash -n`；pyyaml 在 `~/.workbuddy/binaries/python/envs/default`）。
 - ⚠️ **R8 差分校验不需要签名** —— 未签名 release APK 接口面完整，照样能差分。所以它放在
   **CI（每次 push/PR）**而不是只有发版才跑：让「proguard 规则被误删」在 PR 上就红。
+  ⚠️ 但 CI 上**必须传 `--allow-unsigned`**：公开仓库的 PR 流水线不能拿签名密钥，
+  产出的包必然未签名，不传就每次红在一个与本次改动无关的假警报上。
+- ⚠️ tag 过滤必须写 **`v[0-9]*` 而不是 `v*`** —— `vendor-js-v1` 也以 v 开头，
+  写 `v*` 会在建 vendor 资产时误触发一次正式发布。
+- 第三方 JS 运行库（cat.js / cheerio.min.js / crypto-js.js / gbk.js）不进库，
+  存在 release tag **`vendor-js-v1`** 里；release.yml 构建前拉取，**拉不到即 fail**
+  （缺库的 APK 构建时不报错，直到用户打开 `.js` 源才炸）。
+  ⚠️ `.gitignore` 里**只能逐个文件列**，写 `js/lib/**` 会连 `http.js`/`spider.js`/`similarity.js`
+  一起排掉 —— 那三个是本项目自己的代码。
 - ⚠️ `gradlew` 在 git 里曾是 **100644**（无执行位）；已 `git update-index --chmod=+x`。
 - ⚠️ compileSdk 37.1 的 SDK 包名是 **`platforms;android-37.1`**，写 `android-37` 会
   「Failed to find target with hash string」。
 - 版本号靠 `-Pbeevideo.versionName/-Pbeevideo.versionCode` 注入（不传＝原值）。
+- ⚠️ 本机 `git push` 会命中 **`git config` 里写死的 `http.proxy=127.0.0.1:10809`**（常是死的）；
+  当前可用代理在环境变量 `http_proxy` 里 → 用 `git -c http.proxy=$http_proxy push` 绕过。
 - ⚠️ CI 上**别抄** `--no-daemon --max-workers=1`，那是本机沙箱的绕行。
 - ⚠️ 本机裸 `bash` 会命中 WSL 转发器、被安全策略拦 → 脚本里用 Git 的 bash 全路径。
 
