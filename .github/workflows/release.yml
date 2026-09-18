@@ -26,7 +26,11 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # ⚠️ 必须是 `v[0-9]*` 而不是 `v*` —— glob 只看首字符，`vendor-js-v1` 这种
+    #    非版本 tag 也以 v 开头，写 `v*` 就会在**建 vendor 资产时误触发一次正式发布**。
+    #    （本仓库确实会推一个 vendor-js-v1 的 tag，这个坑是踩实的。）
+    #    收紧后只有 v1 / v1.2 / v1.2.3 这类才触发。
+    tags: ['v[0-9]*']
   workflow_dispatch:
     inputs:
       version:
