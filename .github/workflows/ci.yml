@@ -109,7 +109,18 @@ jobs:
           echo "release: $REL"
           echo "debug  : $DBG"
           [ -n "$REL" ] && [ -n "$DBG" ] || { echo "::error::没找到 APK，上游构建其实没成功"; exit 1; }
-          python3 .workbuddy/scripts/verify_release.py "$REL" "$DBG"
+          # ⚠️ `--allow-unsigned` 只能在这里（CI）用，也必须在这里用。
+          #
+          # 本仓库是公开的、CI 还会被 PR 触发 —— 把签名密钥配给它等于把密钥交给
+          # 任何提 PR 的人（fork PR 拿不到 secrets，但同仓库分支的 PR 拿得到）。
+          # 所以 CI 上 `assembleRelease` 产出的必然是**未签名** APK。
+          #
+          # 而 R8 的删减与签名毫无关系：未签名包的接口面一样完整，差分校验照样成立。
+          # 第一版 workflow 忘了这个开关，于是每次 CI 都红在「未签名」上 ——
+          # 那是个假警报，会训练人忽略这个 job。
+          #
+          # 发布流水线（release.yml）里**不传**它：那里签名是硬要求。
+          python3 .workbuddy/scripts/verify_release.py --allow-unsigned "$REL" "$DBG"
 
       - name: 上传单测报告
         # always()：只有测试挂掉的时候，这份报告才有人看。

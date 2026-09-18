@@ -28,7 +28,14 @@ OkHttp/Okio 的是运行时才 `DexClassLoader` 进来的 jar。第一版 releas
 唯一可信的判据是**差分比对**。
 
 用法:
-    python verify_release.py <release.apk> <debug.apk>
+    python verify_release.py [--allow-unsigned] <release.apk> <debug.apk>
+
+    `--allow-unsigned` 只给 CI 用。CI 跑在公开仓库上、而且会被 PR 触发，
+    **绝不能**把签名密钥交给 PR 流水线（fork 的 PR 拿到密钥 = 把密钥交给任何
+    贡献者），所以 CI 构建出的 release APK 必然是未签名的。而 R8 的删减与签名
+    毫无关系 —— 未签名包的接口面一样完整，差分校验照样成立，只有 §4 那条
+    「必须已签名」在这里不适用。发布流水线（release.yml）里**别传**这个开关：
+    那里签名是硬要求。
 """
 import os
 import struct
@@ -164,10 +171,13 @@ def size_breakdown(path, top=8):
 
 
 def main():
-    if len(sys.argv) < 3:
+    # 见文件头「用法」：CI 上必须传 --allow-unsigned，发布流水线上绝不能传。
+    allow_unsigned = "--allow-unsigned" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) < 2:
         print(__doc__)
         return 1
-    rel_apk, dbg_apk = sys.argv[1], sys.argv[2]
+    rel_apk, dbg_apk = args[0], args[1]
 
     print("=" * 74)
     for tag, p in (("release", rel_apk), ("debug", dbg_apk)):
@@ -393,10 +403,16 @@ def main():
     # ── 4. 签名 ───────────────────────────────────────────────────────────
     print("\n── 4. APK 签名 ──")
     v1, v2 = apk_signature_info(rel_apk)
+    signed = bool(v1 or v2)
     print(f"   v1 (META-INF): {v1 or '无'}")
     print(f"   v2/v3 签名块 : {'有' if v2 else '无'}")
-    if v1 or v2:
+    if signed:
         print("   ✅ 已签名，可安装")
+    elif allow_unsigned:
+        # ⚠️ 这里不能写成「✅」—— 未签名就是未签名，只是**当前场景下可以接受**。
+        #    措辞要让人一眼看出"这是被显式放行的，不是通过"。
+        print("   ⚠️  未签名 —— 当前为 --allow-unsigned 模式（CI：不给 PR 流水线密钥）。"
+              "R8 差分不受影响，但**该包不可安装**；发布流水线里这一项是硬要求。")
     else:
         print("   ❌ 未签名 —— adb install 会被拒（INSTALL_PARSE_FAILED_NO_CERTIFICATES）")
 
@@ -409,7 +425,8 @@ def main():
 
     print("\n" + "=" * 74)
     bad = (bool(missing_classes or lost_members or tp_missing or tp_lost or room_bad)
-           or bool(q_missing or q_lost) or bool(js_bad)) or not (v1 or v2)
+           or bool(q_missing or q_lost) or bool(js_bad)
+           or (not signed and not allow_unsigned))
     print("结论：", "❌ 有问题，见上" if bad else "✅ 全项通过")
     return 1 if bad else 0
 
