@@ -24,11 +24,32 @@ okhttp = "4.12.0"
 # "Stub!"），所以纯 JVM 测试里必须换成真实实现，否则 CatVodConfigParser
 # 一 `JSONObject(json)` 就炸。仅 testImplementation，不进 APK。
 orgJson = "20240303"
+# 协程单测。版本**必须**跟运行时解析到的一致：现在 debugRuntimeClasspath 解析出来是
+# 1.9.0（由 lifecycle 传递带入），写高了等于顺手把全项目的 kotlinx-coroutines-core
+# 一起抬版本 —— 单测依赖不该改运行时的东西。
+coroutinesTest = "1.9.0"
 # Gson。**不是我们想用，是真实 csp jar 一定要**：反汇编 7 个真实 jar 的 DEX
 # 后发现 com/google/gson 是 7/7 全部依赖、且没有一个把 Gson 打进 jar 里 ——
 # 也就是说这一层必须由宿主提供，缺了就是 NoClassDefFoundError。
 # 另外 SpiderApi.multiReq 的签名里直接有 com.google.gson.JsonArray。
 gson = "2.11.0"
+# Room 2.8.4 —— 不是随便挑的：本机 Gradle 缓存里 room-compiler 只到 2.8.4
+# （2.8.5 只发了 runtime，没有 compiler），选别的版本就得现拉一次网络。
+room = "2.8.4"
+# KSP 的版本号格式是 `<Kotlin 版本>-<KSP 自身版本>`，**前半段必须和上面的 kotlin
+# 完全一致**，否则报 "ksp-2.x.x is too old for kotlin-2.y.y"。2.2.10 正对应，不要手改。
+ksp = "2.2.10-2.0.2"
+# 本地代理服务的 HTTP 层。**不是随便挑的**：CatVod 生态的参照宿主（FongMi/TV）
+# 用的就是它，端口协商、请求解析、分块响应这些行为要对齐才有意义。
+# BSD-3-Clause，与本项目不冲突（对比：参考宿主的 app 模块是 GPL-3.0，不能抄）。
+nanohttpd = "2.3.1"
+# QuickJS 的 Android/JVM 绑定，跑 `.js` 爬虫（drpy 系）。
+# **两个 artifact 都要**，不是重复引入：
+#   wrapper-java    —— 纯 JVM 部分：`com.whl.quickjs.wrapper.*`（QuickJSContext / JSObject / …），
+#                      也是编译期唯一能看到的那个（`wrapper-android` 只带 .so 与加载器）。
+#   wrapper-android —— AAR：`com.whl.quickjs.android.QuickJSLoader` + libquickjs.so（各 ABI）。
+# 版本 3.2.3 就是参考宿主钉的那个，两边行为要对齐，别自行升级。
+quickjs = "3.2.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -53,10 +74,22 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 # ViewModel
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
 
+# Compose 与生命周期的接缝：`collectAsStateWithLifecycle`（退到后台就断开
+# 数据库订阅）与 `LifecycleEventEffect`（ON_STOP 时强制保存播放进度）。
+# 与上面两个 lifecycle 构件同一个版本号，跟着 lifecycleViewmodelCompose 走。
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleViewmodelCompose" }
+
 # Media3 / ExoPlayer
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+# 磁盘缓存与它的元数据库。
+# 这两个是 exoplayer 的**传递**依赖（SimpleCache/CacheDataSource 在 modules-2 里是被
+# exoplayer 拉进来的），但传递依赖的可见性是对方的实现细节 —— 我们直接 new 了
+# SimpleCache / StandaloneDatabaseProvider，就必须自己声明，否则对方哪天把
+# `implementation` 改成 `compileOnly`，编译期直接断。
+androidx-media3-datasource = { group = "androidx.media3", name = "media3-datasource", version.ref = "media3" }
+androidx-media3-database = { group = "androidx.media3", name = "media3-database", version.ref = "media3" }
 
 # Image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
@@ -64,13 +97,33 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 # 网络（CatVod 兼容层 + 站点请求）
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
+# 本地代理服务（jar 发的播放地址指向 127.0.0.1:<port>/proxy，播放器来取时回灌给 jar）
+nanohttpd = { group = "org.nanohttpd", name = "nanohttpd", version.ref = "nanohttpd" }
+
 # 仅单元测试用（真实 org.json，替代 android.jar 的桩）
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
-# Gson —— 真实 csp jar 的硬依赖，见上面 gson 版本号的注释
+# 仅单元测试用：`runTest` 的虚拟时间，以及 `Dispatchers.setMain`
+# —— ViewModel 的 `viewModelScope` 挂在 Main 上，不替换就起不来。
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
+
+# Gson —— 真实 csp jar 的硬依赖，见上面 gson 版本号的注释。
+# `.js` 爬虫侧同样在用：`Req` / `Res` 两个 bean 靠它把 JS 传进来的 options 反序列化。
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+
+# QuickJS 绑定，见上面 quickjs 版本号的注释
+quickjs-android = { group = "wang.harlon.quickjs", name = "wrapper-android", version.ref = "quickjs" }
+quickjs-java = { group = "wang.harlon.quickjs", name = "wrapper-java", version.ref = "quickjs" }
+
+# 持久化：观看进度与收藏。只有两张表、两个查询，用 Room 而不是手写 SQLiteOpenHelper
+# —— 手写的话「列名对不上」只能等到运行时才炸。
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+# room-ktx 提供 suspend DAO 与 Flow 返回类型，必须有：本项目要求所有落库都在协程里做
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 

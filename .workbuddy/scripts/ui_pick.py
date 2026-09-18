@@ -18,6 +18,13 @@ chip 行）和长列表的**屏幕外项根本没被组合**，dump 里压根没
 
 默认先往左/后找，找不到**自动换反方向再找一遍**（chip 行的滚动位置会保留，
 只扫一个方向会永远找不到屏外的前几项）。
+
+⚠️ 点击坐标是**沿祖先链回溯**出来的，不是文本节点自己的 bounds ——
+Compose 的语义叶子节点 bounds 常常是 [0,0][0,0]，直接用它就会点到 (0,0)。
+回溯不到真实尺寸、或回溯到一整块滚动容器时，本脚本**拒绝点击**并返回 3，
+绝不盲点（盲点最恶劣的地方是它会打印"点击成功"）。
+
+退出码: 0 成功 / 1 缺参数 / 2 滑动也找不到 / 3 定位不可靠，拒绝点击
 """
 import re
 import subprocess
@@ -48,6 +55,30 @@ def bounds(node):
 def center(node):
     b = bounds(node)
     return None if b is None else ((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+
+
+def parents_of(root):
+    return {c: p for p in root.iter() for c in p}
+
+
+def real_box(node, parents):
+    """沿祖先链往上找第一个**有真实尺寸**的节点，返回它的 bounds。
+
+    ⚠️ Compose 把文字画进共享画布，语义叶子节点（dump 里的 `TextView`）
+    的 bounds **常常是 [0,0][0,0]**。直接拿它算中心就会点到屏幕左上角，
+    而且**不报任何错** —— 看起来像脚本没生效。
+
+    踩过：点「第01集」→ (0, 0)，然后我盯着详情页困惑了半天。
+    能点的从来不是那层文本节点，而是它的某个祖先容器。
+    `ui_tap.py` 一直是对的（它的文档里就写了这条），这里补上同样的回溯。
+    """
+    cur = node
+    while cur is not None:
+        b = bounds(cur)
+        if b and b[2] > b[0] and b[3] > b[1]:
+            return b
+        cur = parents.get(cur)
+    return None
 
 
 def find(root, text):
@@ -185,10 +216,15 @@ def main():
     root = dump()
 
     if "--list" in argv:
+        # ⚠️ 打印的是**回溯后的**框，不是文本节点自己的 bounds ——
+        # Compose 那些节点一半以上是 [0,0][0,0]，照着它判断"这个控件不存在"会误判。
+        pm0 = parents_of(root)
         for n in root.iter():
             t = (n.get("text") or "").strip()
             if t:
-                print(f"  {bounds(n)}  {t}")
+                b = real_box(n, pm0)
+                tag = "" if bounds(n) != (0, 0, 0, 0) else " (无尺寸，取自祖先)"
+                print(f"  {str(b):24s} {t}{tag}")
         return 0
 
     if not positional:
@@ -230,9 +266,27 @@ def main():
         print(f"[pick] 当前可见: {visible[:14]}")
         return 2
 
-    c = center(node)
-    adb("shell", "input", "tap", str(c[0]), str(c[1]))
-    print(f"[pick] 点击「{target}」→ {c}")
+    pm = parents_of(root)
+    box = real_box(node, pm)
+    if box is None:
+        print(f"[pick] 「{target}」及其所有祖先的 bounds 全是 0 —— 解析不出位置，"
+              f"拒绝盲点")
+        print("       盲点的典型后果：点到屏幕左上角 (0,0)，然后你以为脚本没生效")
+        return 3
+
+    all_b = [b for b in (bounds(n) for n in root.iter()) if b]
+    screen_h = max(b[3] for b in all_b) if all_b else 0
+    x1, y1, x2, y2 = box
+    if screen_h and (y2 - y1) > screen_h * 0.6:
+        print(f"[pick] ⚠️ 「{target}」回溯到的框 {box} 高度超过屏高一半，"
+              f"像滚动容器而不是控件 —— 拒绝盲点")
+        print(f"       它自己的 bounds = {bounds(node)}")
+        return 3
+
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    note = "" if bounds(node) != (0, 0, 0, 0) else "  (文本节点无尺寸，位置取自祖先)"
+    adb("shell", "input", "tap", str(cx), str(cy))
+    print(f"[pick] 点击「{target}」→ ({cx}, {cy})  框 {box}{note}")
     return 0
 
 

@@ -5,6 +5,7 @@ import android.util.Log
 import com.github.catvod.crawler.Spider
 import dalvik.system.DexClassLoader
 import java.io.File
+import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -33,14 +34,33 @@ object DexJarLoader {
 
     private const val DIR_JAR = "catvod/jar"
     private const val DIR_DEX = "catvod/dex"
+    private const val TAG = "CatVodJar"
+
+    /** 按 [keyOf] 缓存 ClassLoader。 */
+    private val loaders = ConcurrentHashMap<String, DexClassLoader>()
 
     /**
-     * 按「文件路径 + 大小 + 修改时间」缓存 ClassLoader。
+     * jar → 它自带的**静态** `com.github.catvod.spider.Proxy.proxy(Map)`。
      *
-     * 不用 URL 当键：同一个 URL 在不同时间可能指向不同内容，
+     * 本地代理服务收到 `/proxy` 后要走进 jar 自己（见 `LocalProxyServer`），
+     * 而那个入口是 jar 里的静态方法，只能反射拿。
+     *
+     * ⚠️ 反射失败是**常态**，不是错误：多数 jar 根本没有这个类。
+     * 反过来，`getMethod` 在类存在但方法签名不符时抛 `NoSuchMethodException`
+     * —— 那才是值得看一眼的情况。
+     */
+    private val proxyMethods = ConcurrentHashMap<String, Method>()
+
+    /** 最近一次被站点用到的 jar，供 `/proxy` 优先派发（同参考实现 `JarLoader.recent`）。 */
+    @Volatile
+    private var recentKey: String? = null
+
+    /**
+     * ClassLoader 的缓存键。**不能用 URL**：同一个 URL 在不同时间可能指向不同内容，
      * 而 ClassLoader 一旦建好就无法重新加载同名类，所以键必须能反映文件本身。
      */
-    private val loaders = ConcurrentHashMap<String, DexClassLoader>()
+    private fun keyOf(jarFile: File): String =
+        "${jarFile.absolutePath}@${jarFile.length()}@${jarFile.lastModified()}"
 
     /**
      * 确保 jar 已下载到本地并返回文件。
@@ -78,7 +98,7 @@ object DexJarLoader {
         if (!jarFile.exists() || jarFile.length() == 0L) {
             throw CatVodException("jar 文件不可用：${jarFile.absolutePath}")
         }
-        val key = "${jarFile.absolutePath}@${jarFile.length()}@${jarFile.lastModified()}"
+        val key = keyOf(jarFile)
         return loaders.getOrPut(key) {
             enforceReadOnly(jarFile)
             val dexDir = File(context.codeCacheDir, DIR_DEX).apply { mkdirs() }
@@ -97,6 +117,7 @@ object DexJarLoader {
                 )
             }
             invokeJarInit(context, loader)
+            invokeJarProxy(key, loader)
             loader
         }
     }
@@ -118,7 +139,7 @@ object DexJarLoader {
      * 报 `ClassNotFoundException` 是正常路径，不是错误。
      *
      * 对照原版还有一处 `com.github.catvod.spider.Proxy`（把 `proxy(Map)` 反射缓存起来
-     * 供本地代理服务调用）—— 本项目没有本地代理服务，所以不做，见 `Spider.proxy`。
+     * 供本地代理服务调用）—— 那一步在 [invokeJarProxy]。
      */
     private fun invokeJarInit(context: Context, loader: DexClassLoader) {
         runCatching {
@@ -129,9 +150,52 @@ object DexJarLoader {
             // 用 Log 而不是 SpiderDebug：后者默认静音（那是给爬虫自己用的），
             // 而这条是宿主侧的诊断信息，应该始终能在 logcat 里看到。
             if (e !is ClassNotFoundException) {
-                Log.w("CatVodJar", "jar 的 Init 钩子执行失败：$e")
+                Log.w(TAG, "jar 的 Init 钩子执行失败：$e")
             }
         }
+    }
+
+    /**
+     * 反射拿 jar 里的**静态** `com.github.catvod.spider.Proxy.proxy(Map)` 并缓存。
+     *
+     * 这是本地代理服务的回路终点：jar 把播放地址发成
+     * `http://127.0.0.1:<port>/proxy?do=m3u8&url=…`，播放器来取时宿主回到这里，
+     * 由 jar 自己决定怎么取流、加什么头、怎么改写 m3u8。
+     *
+     * ⚠️ 它是**静态**方法，所以调用时第一个参数传 `null`。
+     * 写成实例方法调（`method.invoke(instance, …)`）会得到
+     * `IllegalArgumentException: object is not an instance of declaring class`。
+     */
+    private fun invokeJarProxy(key: String, loader: DexClassLoader) {
+        runCatching {
+            val clazz = loader.loadClass("com.github.catvod.spider.Proxy")
+            proxyMethods[key] = clazz.getMethod("proxy", Map::class.java)
+        }.onFailure { e ->
+            // 绝大多数 jar 没有这个类 —— ClassNotFound 是正常路径，别刷日志。
+            if (e !is ClassNotFoundException) {
+                Log.w(TAG, "jar 的静态 Proxy 钩子不可用：$e")
+            }
+        }
+    }
+
+    /**
+     * 当前可用的「jar → 静态 proxy 方法」，**最近用过的排在最前**。
+     *
+     * 顺序有意义：多数 jar 发的 `/proxy` 请求里不带 `siteKey`，宿主只能挨个试，
+     * 而实际要处理的几乎总是刚刚在用的那个 jar。参考实现 `JarLoader.proxy`
+     * 就是 `recent` 优先、失败再 `tryOthers`。
+     */
+    fun proxyEntries(): List<Method> {
+        val recent = recentKey
+        if (recent == null) return proxyMethods.values.toList()
+        val first = proxyMethods[recent]
+        val rest = proxyMethods.filterKeys { it != recent }.values.toList()
+        return if (first == null) rest else listOf(first) + rest
+    }
+
+    /** 由站点创建流程标记：这个 jar 刚被用过。 */
+    fun markRecent(jarFile: File) {
+        recentKey = keyOf(jarFile)
     }
 
     /**
@@ -177,6 +241,10 @@ object DexJarLoader {
     /** 清空缓存（换配置时用）。ClassLoader 无法卸载，只能丢掉引用。 */
     fun clear() {
         loaders.clear()
+        // 静态 proxy 方法挂在旧的 ClassLoader 上，换配置后必须一起丢 ——
+        // 留着的话 /proxy 会去调上一份配置的 jar，而报错完全指不到这里。
+        proxyMethods.clear()
+        recentKey = null
     }
 
     private fun enforceReadOnly(file: File) {

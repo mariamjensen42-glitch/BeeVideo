@@ -14,9 +14,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
@@ -26,10 +30,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -41,25 +45,45 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.cycling.beevideo.R
-import com.cycling.beevideo.data.repository.DemoContentRepository
 import com.cycling.beevideo.domain.model.Category
-import com.cycling.beevideo.domain.model.ContentSource
 import com.cycling.beevideo.domain.model.SourcePhase
-import com.cycling.beevideo.domain.model.SourceStatus
 import com.cycling.beevideo.domain.model.Vod
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.ui.components.BeeCenteredNotice
 import com.cycling.beevideo.ui.components.BeeChipRow
 import com.cycling.beevideo.ui.components.HeroCarousel
+import com.cycling.beevideo.ui.components.HeroSkeleton
 import com.cycling.beevideo.ui.components.LoadState
 import com.cycling.beevideo.ui.components.PosterCard
+import com.cycling.beevideo.ui.components.SkeletonChipRow
+import com.cycling.beevideo.ui.components.SkeletonPosterGrid
 import com.cycling.beevideo.ui.components.beeTopAppBarColors
-import com.cycling.beevideo.ui.components.loadState
+import com.cycling.beevideo.ui.components.skeletonSemantics
+import com.cycling.beevideo.ui.preview.FakeContentRepository
+import com.cycling.beevideo.ui.preview.FakeSourceRepository
+import com.cycling.beevideo.ui.preview.PreviewViewModelStoreOwner
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+
+/** 海报墙骨架的行数。一屏正好看得见两行，多画的部分在屏幕外，白烧绘制。 */
+private const val HOME_SKELETON_ROWS = 2
+
+/*
+ * 微光的错峰相位分配。
+ *
+ * 微光是「所有块共用周期、起始相位依次后移」，相位差恒定才是一道推过去的波。
+ * 首屏三段占用的序号：刊头 [0]、分类行 [1,3]、海报墙从 4 起（墙内按 `行 + 列`）。
+ * 这三段**不能重叠** —— 重叠的两块会同相，在波里是一个"双闪"，看得出来。
+ */
+private const val HERO_STAGGER_SPAN = 1
+private const val CHIP_STAGGER_SPAN = 3
 
 /**
  * 首页。
@@ -84,6 +108,7 @@ fun HomeScreen(
     sources: ContentSourceRepository,
     onVodClick: (Vod) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSearch: () -> Unit,
 ) {
     val status by sources.status.collectAsState()
     val scope = rememberCoroutineScope()
@@ -110,6 +135,31 @@ fun HomeScreen(
                 subtitle = {
                     if (activeName.isNotEmpty()) {
                         Text(text = activeName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                /*
+                 * 搜索入口放在这里的 `actions`，而不是加成第四个底栏 tab。
+                 *
+                 * tab 表达的是"我在哪块区域"，action 表达的是"我要做一件事"。
+                 * 搜索属于后者：它是一次任务，做完就退回原来的区域。而且
+                 * `ShortNavigationBar` 在手机竖屏下中文四项标签会被挤得换行/截断。
+                 *
+                 * ⚠️ 这个槽在标题行里，**不是**独立的一行。`MediumFlexibleTopAppBar`
+                 * 的参数顺序是 title / modifier / subtitle / navigationIcon / actions /
+                 * titleHorizontalAlignment / expandedHeight / …（`javap` 核对过：
+                 * actions 的类型是 `Function3<RowScope, …>`，也就是说它是
+                 * `@Composable RowScope.() -> Unit`）。所以这里放几个图标都行，
+                 * 但**整行只有一份横向空间**，跟 subtitle 抢宽度。
+                 *
+                 * 图标不传颜色 —— IconButton 的默认内容色就是 onSurfaceVariant，
+                 * 正好是顶栏 action 该有的那一档。
+                 */
+                actions = {
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.search_action),
+                        )
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -177,18 +227,30 @@ private fun HomeFeed(
     onVodClick: (Vod) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val categoriesState = loadState(activeSourceId) { content.categories() }
+    /*
+     * 两次加载与它们之间的**依赖**交给持有者（见 `HomeFeedState` 的说明）。
+     * 挂在 ViewModel 上是因为 `configChanges` 不含 `uiMode` —— 主题切换会重建 Activity，
+     * 而选中的分类必须活下来（分类 id 在不同站点之间会撞车，归零不是回到「推荐」）。
+     */
+    val viewModel: HomeFeedViewModel = viewModel(
+        factory = viewModelFactory { initializer { HomeFeedViewModel(content) } },
+    )
+    val state = viewModel.state
+
+    // 换来源要显式说一声：持有者不随来源变化重建（ViewModel 的作用域是导航栈那一条）
+    LaunchedEffect(activeSourceId) { state.setSource(activeSourceId) }
+
+    val categoriesState by state.categories.collectAsStateWithLifecycle()
     val categories = (categoriesState as? LoadState.Ready)?.value.orEmpty()
 
-    var selectedIndex by remember { mutableIntStateOf(0) }
-    // 分类还没到（或为空）时先按「推荐」请求 —— 那一个一定存在，不必等分类列表
-    val selectedId = categories.getOrNull(selectedIndex)?.id
-        ?: ContentRepository.CATEGORY_RECOMMEND
-
-    val vodsState = loadState(activeSourceId, selectedId) {
-        content.listByCategory(selectedId)
-    }
+    val vodsState by state.vods.collectAsStateWithLifecycle()
     val vods = (vodsState as? LoadState.Ready)?.value.orEmpty()
+
+    // 局部变量：`by` 委托出来的值不能智能转换，而下面多处要按类型分支
+    val currentCategoriesState = categoriesState
+    val currentVodsState = vodsState
+
+    val selectedIndex = state.selectedIndex
 
     /*
      * 精选：从**当前筛选结果**里按评分取前几张。
@@ -232,51 +294,80 @@ private fun HomeFeed(
          *
          * 现在锚点是 `hero`（恒为第 0 项），插入内容不改变它的下标，偏移量就不动。
          * `HeroCarousel` 对空列表直接 return、空 `LazyRow` 高 0，所以空列表时不占地方。
+         *
+         * 加载期改画 [HeroSkeleton] 之后这条**更稳了**：以前 hero 这一项的高度是
+         * 0 → 200dp 地变，严格说也是在动（只是当时整页还不足以滚动，所以没暴露）。
+         * 骨架的高度与真实刊头逐项相同，于是第 0 项连高度都不变。
          */
         item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-            HeroCarousel(vods = featured, onVodClick = onVodClick)
+            if (currentVodsState is LoadState.Loading) {
+                HeroSkeleton()
+            } else {
+                HeroCarousel(vods = featured, onVodClick = onVodClick)
+            }
         }
 
         /*
          * 分类筛选。横向留白传 0 —— 网格项本身已经缩进了 screenMargin，
          * 再传一次就会缩进两倍（`BeeChipRow` 的文档里写明了这条）。
+         *
+         * 分类是**独立于内容列表**加载的：切分类时 vods 重新请求，但 categories
+         * 早就 Ready 了，所以正常情况下这一行一直是真按钮，骨架只在 App 首次
+         * 进入时闪一下。给它做骨架而不是留空，是为了首屏那一整块版式的完整性。
          */
         item(key = "categories", span = { GridItemSpan(maxLineSpan) }) {
-            BeeChipRow(
-                items = categories,
-                selectedIndex = selectedIndex,
-                onSelect = { selectedIndex = it },
-                contentPadding = PaddingValues(0.dp),
-            ) { category -> CategoryLabel(category) }
+            if (currentCategoriesState is LoadState.Loading) {
+                SkeletonChipRow(staggerIndex = HERO_STAGGER_SPAN)
+            } else {
+                BeeChipRow(
+                    items = categories,
+                    selectedIndex = selectedIndex,
+                    onSelect = state::selectCategory,
+                    contentPadding = PaddingValues(0.dp),
+                ) { category -> CategoryLabel(category) }
+            }
         }
 
         item(key = "section", span = { GridItemSpan(maxLineSpan) }) {
             SectionHeader(
                 title = categoryTitle(categories.getOrNull(selectedIndex)),
-                count = if (vodsState is LoadState.Ready) vods.size else null,
+                count = if (currentVodsState is LoadState.Ready) vods.size else null,
             )
         }
 
         when {
-            vodsState is LoadState.Loading ->
+            currentVodsState is LoadState.Loading ->
                 item(key = "loading", span = { GridItemSpan(maxLineSpan) }) {
-                    CenteredNotice(
-                        text = stringResource(R.string.home_loading),
-                        modifier = Modifier.padding(vertical = BeeDimens.gapHuge),
+                    /*
+                     * 海报墙骨架取代了原来那句「正在读取…」。
+                     *
+                     * 两行 6 张：一屏能看到的正好是这些，条数与真实条数无关 ——
+                     * 骨架只负责把首屏填满，多画的部分在屏幕外看不见，白烧绘制。
+                     *
+                     * 那句文字没丢，转成了 contentDescription：骨架块是纯绘制、
+                     * 没有文字节点，不给读屏一句说明的话，加载期间 TalkBack
+                     * 只会念出一片空白。
+                     */
+                    SkeletonPosterGrid(
+                        modifier = Modifier.skeletonSemantics(
+                            stringResource(R.string.home_loading)
+                        ),
+                        rows = HOME_SKELETON_ROWS,
+                        startStaggerIndex = HERO_STAGGER_SPAN + CHIP_STAGGER_SPAN,
                     )
                 }
 
-            vodsState is LoadState.Failed ->
+            currentVodsState is LoadState.Failed ->
                 item(key = "error", span = { GridItemSpan(maxLineSpan) }) {
-                    CenteredNotice(
-                        text = stringResource(R.string.home_load_failed, vodsState.message),
+                    BeeCenteredNotice(
+                        text = stringResource(R.string.home_load_failed, currentVodsState.message),
                         modifier = Modifier.padding(vertical = BeeDimens.gapHuge),
                     )
                 }
 
             vods.isEmpty() ->
                 item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
-                    CenteredNotice(
+                    BeeCenteredNotice(
                         text = stringResource(R.string.home_category_empty),
                         modifier = Modifier.padding(vertical = BeeDimens.gapHuge),
                     )
@@ -353,18 +444,6 @@ private fun SectionHeader(title: String, count: Int?) {
     }
 }
 
-/** 居中一行说明。用于网格里的加载中 / 出错 / 空列表。 */
-@Composable
-private fun CenteredNotice(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        modifier = modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
 /**
  * 整页的状态提示（未配置来源 / 装载失败）。
  *
@@ -417,30 +496,10 @@ private fun SourceNotice(
 
 // ------------------------------------------------------------------ 预览
 
-/**
- * 预览用的假来源状态。
- *
- * 预览环境跑不了网络、也不可能装出一棵配置好的来源树，所以给一个"永远就绪"的
- * 假状态。[com.cycling.beevideo.data.repository.DemoContentRepository] 负责另一半
- * （内容数据）—— 这两个类现在都只为预览存在，见各自的说明。
+/*
+ * 预览用的假来源与假内容都在 `ui/preview/` —— 它们是 domain 接口在 JVM 上的
+ * adapter，所以 ui 不必为了预览就在编译期依赖 data。
  */
-private class PreviewSourceRepository : ContentSourceRepository {
-    override val status = MutableStateFlow(
-        SourceStatus(
-            phase = SourcePhase.READY,
-            configUrl = "",
-            sources = listOf(ContentSource(id = "demo", name = "示例来源")),
-            activeSourceId = "demo",
-            message = "",
-        )
-    )
-
-    override suspend fun restore() = Unit
-    override suspend fun applyConfig(url: String): String? = null
-    override fun selectSource(sourceId: String) = Unit
-    override suspend fun clear() = Unit
-}
-
 @Preview(
     name = "首页 · 手机 411",
     group = "页面",
@@ -452,12 +511,15 @@ private class PreviewSourceRepository : ContentSourceRepository {
 @Composable
 private fun HomeScreenPreview() {
     BeeVideoTheme(darkTheme = true) {
-        HomeScreen(
-            content = DemoContentRepository(),
-            sources = PreviewSourceRepository(),
-            onVodClick = {},
-            onOpenSettings = {},
-        )
+        PreviewViewModelStoreOwner {
+            HomeScreen(
+                content = FakeContentRepository(),
+                sources = FakeSourceRepository.singleSourceReady(),
+                onVodClick = {},
+                onOpenSettings = {},
+                onOpenSearch = {},
+            )
+        }
     }
 }
 
@@ -472,12 +534,15 @@ private fun HomeScreenPreview() {
 @Composable
 private fun HomeScreenLightPreview() {
     BeeVideoTheme(darkTheme = false) {
-        HomeScreen(
-            content = DemoContentRepository(),
-            sources = PreviewSourceRepository(),
-            onVodClick = {},
-            onOpenSettings = {},
-        )
+        PreviewViewModelStoreOwner {
+            HomeScreen(
+                content = FakeContentRepository(),
+                sources = FakeSourceRepository.singleSourceReady(),
+                onVodClick = {},
+                onOpenSettings = {},
+                onOpenSearch = {},
+            )
+        }
     }
 }
 

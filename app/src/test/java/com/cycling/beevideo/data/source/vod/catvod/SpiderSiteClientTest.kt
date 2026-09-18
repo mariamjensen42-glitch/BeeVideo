@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `JarSiteClient` 对 spider 的**调用约定**测试。
+ * `SpiderSiteClient` 对 spider 的**调用约定**测试。
  *
  * ─── 为什么这些用例值得存在 ────────────────────────────────────────────
  * 这几条全部是"调错了也不报错、只是结果不对"的类型：
@@ -23,7 +23,7 @@ import org.junit.Test
  * 测试用的是 [Spider] 的假实现（真实 jar 里那些爬虫的替身），
  * 记录"宿主到底调了哪个重载"，与爬虫内部实现无关。
  */
-class JarSiteClientTest {
+class SpiderSiteClientTest {
 
     /** 记录调用痕迹的假爬虫。只覆写我们关心的那几个方法。 */
     private class FakeSpider(
@@ -79,7 +79,7 @@ class JarSiteClientTest {
     private fun homeJson(listItems: String): String =
         "{\"class\":[{\"type_id\":\"1\",\"type_name\":\"电影\"}],\"list\":[$listItems]}"
 
-    private fun client(spider: Spider) = JarSiteClient(site(), spider, emptyList())
+    private fun client(spider: Spider) = SpiderSiteClient(site(), spider, emptyList())
 
     /**
      * 解析出来的 id 是**带站点前缀**的（`test_key:h1`）。

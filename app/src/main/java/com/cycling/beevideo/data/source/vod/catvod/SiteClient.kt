@@ -34,9 +34,16 @@ interface SiteClient {
      *             真实地址要由站点服务端二次兑换，所以这一步不能省。
      */
     suspend fun playerContent(flag: String?, id: String): PlaySource?
-}
 
-/** 释放客户端持有的资源（jar 的 ClassLoader、连接等）。 */
-interface SiteClientHandle {
-    fun release()
+    /**
+     * 释放这个客户端持有的资源（spider 的内部线程、连接池、jar 的 ClassLoader）。
+     *
+     * 有默认空实现：JSON / XML 源是无状态的，没什么可释放。
+     *
+     * ⚠️ 这条以前**不在接口上** —— 释放靠工厂把缓存里的值向下转型成具体实现再调
+     * `destroy()`。也就是说 `SiteClient` 这个 seam 上根本没有"释放"这个能力，
+     * 而 seam 上那个声明了 `release()` 的 `SiteClientHandle` 接口
+     * **零实现、零调用**。接回接口之后，工厂不必再知道具体实现是谁。
+     */
+    fun close() {}
 }

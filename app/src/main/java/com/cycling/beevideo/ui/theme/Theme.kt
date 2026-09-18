@@ -1,5 +1,6 @@
 package com.cycling.beevideo.ui.theme
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -8,8 +9,12 @@ import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import com.cycling.beevideo.domain.model.ThemeMode
 
 /**
  * Expressive 形状：M3 的十档圆角刻度，按「想要的圆润程度」取用。
@@ -83,15 +88,9 @@ private fun Typography.withBrandFont(): Typography = copy(
     titleLargeEmphasized = titleLargeEmphasized.copy(fontFamily = BeeBrandFont),
 )
 
-/** 官方刻度 + 品牌字体槽。全 App 唯一的排版真相。 */
-private val BeeTypography: Typography = Typography().withBrandFont()
-
 /**
- * Expressive 动效方案：所有组件动画默认走弹簧，带轻微回弹。
- */
-private val BeeMotionScheme = MotionScheme.expressive()
-
-/**
+ * 官方刻度 + 品牌字体槽。全 App 唯一的排版真相。
+ *
  * 排版**不覆盖刻度**，只在官方 `Typography()` 之上换 brand 槽的字体族。
  *
  * 2026-09-15 删除过一次手写的 15 档基准 `Typography` 和 `BeeEmphasized`：
@@ -102,17 +101,53 @@ private val BeeMotionScheme = MotionScheme.expressive()
  * 用法：正文取 `MaterialTheme.typography.bodyMedium`，
  * 需要强调的那一处取 `MaterialTheme.typography.bodyMediumEmphasized`。
  */
+private val BeeTypography: Typography = Typography().withBrandFont()
+
+/**
+ * Expressive 动效方案：所有组件动画默认走弹簧，带轻微回弹。
+ */
+private val BeeMotionScheme = MotionScheme.expressive()
+
+/**
+ * 把用户选的三态模式解析成「现在这一帧该不该用深色」。
+ *
+ * **这里是全 App 唯一读 `isSystemInDarkTheme()` 的地方。**
+ *
+ * 为什么必须收成一束：这个判断一共被两种"深色"牵着 —— 系统设置、以及用户在
+ * 设置页选的那一项。散开写就会各写各的，典型症状是"设置里选了浅色，但状态栏
+ * 图标还是白的"（某一处漏了、或者顺序错了）。
+ *
+ * 组件内部要判断深浅时**不许**再调 `isSystemInDarkTheme()`，而是按当前
+ * `colorScheme` 的实际亮度判 —— 见 `HeroCarousel.heroFills()` 与 `Shimmer`
+ * 的说明：读系统设置会把「用户强制浅色但系统是深色」这条路径判反。
+ */
+@Composable
+fun ThemeMode.isDark(): Boolean = when (this) {
+    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    ThemeMode.LIGHT -> false
+    ThemeMode.DARK -> true
+}
+
+/**
+ * Expressive 主题。
+ *
+ * [darkTheme] **没有默认值，这是有意的**。
+ *
+ * 以前它默认 `isSystemInDarkTheme()`，看着方便，但那正是上面那条约束的漏洞：
+ * 用户已经在设置里选了「深色」，某个调用点漏传参数就会静默地跟随系统，
+ * 于是同一个 App 里出现两套深浅色（`BeeVideoTheme` 一层、页面里另一层）。
+ * 现在漏传是**编译错误**，不是线上 bug。
+ *
+ * 生产入口只有 `MainActivity` 一处：`mode.isDark()`。
+ * `@Preview` 一律显式传值，正好也是"不用改系统设置就能出浅色稿"的做法。
+ */
 @Composable
 fun BeeVideoTheme(
-    /**
-     * 默认**跟随系统**的深浅色设置。
-     *
-     * 显式暴露成参数是为了让 `@Preview` 能各自锁一种：
-     * `BeeVideoTheme(darkTheme = false)` 出浅色稿，不用改系统设置或跑两台机器。
-     */
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean,
     content: @Composable () -> Unit,
 ) {
+    ApplySystemBarAppearance(darkTheme)
+
     val colorScheme: ColorScheme = if (darkTheme) BeeDarkScheme else BeeLightScheme
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
@@ -121,4 +156,35 @@ fun BeeVideoTheme(
         typography = BeeTypography,
         content = content,
     )
+}
+
+/**
+ * 让状态栏 / 导航栏的图标跟着**应用自己的**深浅色走。
+ *
+ * 不做这件事的后果很具体：`MainActivity` 里 `enableEdgeToEdge()` 判定图标明暗
+ * 用的是**系统**的 uiMode。用户在系统是深色的机器上把 App 强制成浅色之后，
+ * 系统仍然认为"现在是夜间"，于是把状态栏图标画成白色 —— 白图标压在浅色的
+ * 页面上，**直接看不见**（电量、时间、信号一起消失）。
+ *
+ * `WindowCompat.getInsetsController` 里的 "Compat" 是必要的：API 30 之前
+ * 那两行标志要通过旧的 `Window.setStatusBarColor` + `SYSTEM_UI_FLAG_LIGHT_*`
+ * 组合生效，`WindowCompat` 负责抹平这个差别。本项目 minSdk 31，走的已是新路径，
+ * 但保持一致总比依赖"我们永远不降 minSdk"更稳。
+ *
+ * 预览环境里 `view.context` 不是 Activity（是工具链的 BridgeContext），
+ * 于是拿到 null 直接跳过 —— 预览本来也不需要真的改窗口。
+ */
+@Composable
+private fun ApplySystemBarAppearance(darkTheme: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(darkTheme, view) {
+        val window = (view.context as? Activity)?.window
+        if (window != null) {
+            val controller = WindowCompat.getInsetsController(window, view)
+            // 深色 → 图标要浅（false）；浅色 → 图标要深（true）。取反，别写反
+            controller.isAppearanceLightStatusBars = !darkTheme
+            controller.isAppearanceLightNavigationBars = !darkTheme
+        }
+        onDispose { }
+    }
 }

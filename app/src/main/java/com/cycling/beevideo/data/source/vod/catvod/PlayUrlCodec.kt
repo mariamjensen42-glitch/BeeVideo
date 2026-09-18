@@ -122,28 +122,4 @@ object PlayUrlCodec {
         return (index + 1).toString()
     }
 
-    /**
-     * 填 URL 模板里的占位符。
-     *
-     * 各家的写法不统一，实测出现过 `{cateId}` / `{catePg}` / `{cateName}` /
-     * `{keyword}` / `{pg}` / `{wd}` 六种，所以每种都认。
-     */
-    fun fillTemplate(
-        template: String,
-        cateId: String? = null,
-        page: Int? = null,
-        keyword: String? = null,
-    ): String {
-        var s = template
-        if (cateId != null) {
-            s = s.replace("{cateId}", cateId).replace("{cateName}", cateId)
-        }
-        if (page != null) {
-            s = s.replace("{catePg}", page.toString()).replace("{pg}", page.toString())
-        }
-        if (keyword != null) {
-            s = s.replace("{keyword}", keyword).replace("{wd}", keyword)
-        }
-        return s
-    }
 }

@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /**
  * CatVod 的网络工具类 —— 本项目自带的兼容层。
@@ -59,6 +60,33 @@ object OkHttp {
      */
     @JvmStatic
     fun dns(): Dns = Dns.SYSTEM
+
+    /**
+     * 按「是否跟随重定向 + 超时」派生一个客户端。
+     *
+     * `Connect.to` 用它给 JS 爬虫的每次 `req()` 定制连接：
+     * ```java
+     * OkHttp.client(req.isRedirect(), req.getTimeout())
+     * ```
+     * `redirect` 默认 1，`timeout` 默认 10000ms（见 `Req`）。
+     *
+     * ⚠️ **每次都新建一个 `OkHttpClient`**，这是有意的，也是安全的：
+     * `newBuilder().build()` 出来的实例**共享**父实例的连接池与线程池，
+     * 只是超时/重定向策略不同。反过来，改成"缓存几个变体"会让爬虫拿到的超时
+     * 不再等于它在 `options` 里要求的那一个 —— 而站点对超时的要求是**逐请求**的。
+     *
+     * 用 `newBuilder()` 而不是从零 `Builder()`：从零建等于每个请求一个连接池，
+     * 这是参考宿主明确避开的事（见 `CatVodHttp` 的类注释）。
+     */
+    @JvmStatic
+    fun client(redirect: Boolean, timeout: Long): OkHttpClient =
+        CatVodHttp.client.newBuilder()
+            .connectTimeout(timeout, TimeUnit.MILLISECONDS)
+            .readTimeout(timeout, TimeUnit.MILLISECONDS)
+            .writeTimeout(timeout, TimeUnit.MILLISECONDS)
+            .followRedirects(redirect)
+            .followSslRedirects(redirect)
+            .build()
 
     // ── 一次性请求 ────────────────────────────────────────────────────
 

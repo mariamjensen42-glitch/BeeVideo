@@ -60,11 +60,23 @@ import json
 import os
 import struct
 import sys
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18080
+
+# 人为延迟（毫秒），只用在「内容接口」上，`/config.json` 不延迟。
+#
+# 存在的理由：**骨架屏的验证需要一段够长的加载窗口。** 真源上首页只要几百毫秒，
+# 而一次 `screencap` 就要 150–400ms —— 窗口里最多落两帧，根本看不出微光在不在动。
+# 把它拉到 6 秒，就能连拍几十帧、逐帧看光带的位置。
+#
+# 默认 0，不影响其它任何用途。用法：
+#     MOCK_DELAY_MS=6000 python mock_catvod_server.py 18080
+DELAY_MS = int(os.environ.get("MOCK_DELAY_MS", "0"))
+
 
 # ⚠️ 用**脚本自己所在目录**定位 jar，不用相对路径。
 # 相对路径曾经让 /spider.jar 稳定 404：服务是在项目根目录起的，而 jar 在
@@ -371,6 +383,27 @@ CONFIG = {
                     "noproxy$$$1$$$./json/wogg.json$$$MOGG"),
             "searchable": 1,
         },
+        {
+            # ext 是**纯动作标记**（不以 http 开头，所以宿主不该去下载它，
+            # 原样透传给爬虫）。MockSite 看到它就改用 `Proxy.getUrl(true)`
+            # 拼一条**自指**播放地址 `http://127.0.0.1:<port>/proxy?do=m3u8&url=…`，
+            # 也就是真实 jar 发地址的形态。
+            #
+            # 有了它，"播放器 → 本地代理服务 → 派发器 → jar 的静态 Proxy"
+            # 这一整条才有真实执行者。没这一项时，宿主那条分支的候选列表恒为空。
+            #
+            # 验收：点这一站的任意一集，logcat 里应出现
+            #   LocalProxy: 本地代理服务已启动：http://127.0.0.1:<port>/proxy
+            #   LocalProxy: jar 接手 do=m3u8 → 200
+            #   LocalProxy: jar 接手 do=proxy → 206
+            # 以及 `do=unknown` 之类没人认的动作应该是 502（而不是 200）。
+            "key": "mock_jar_proxy",
+            "name": "Mock 代理源",
+            "type": 3,
+            "api": "csp_MockSite",
+            "ext": "proxy",
+            "searchable": 1,
+        },
     ],
     "flags": [],
 }
@@ -405,6 +438,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/config.json":
             return self._json(CONFIG)
+
+        # 见文件头 DELAY_MS：给"内容接口"加人为延迟，把加载窗口拉长。
+        # 放在 config.json 之后 —— 配置必须秒回，否则 App 一直停在"装载中"，
+        # 那是另一个状态（整页的 LoadingIndicator），看不到骨架屏。
+        if DELAY_MS:
+            time.sleep(DELAY_MS / 1000.0)
 
         # ── 以下是真实配置合集里的"非站点配置"形态，用来验证 App 的报错是否能指路 ──
 

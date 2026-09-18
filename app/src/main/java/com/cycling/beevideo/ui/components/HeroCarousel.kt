@@ -40,8 +40,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.cycling.beevideo.R
-import com.cycling.beevideo.data.demo.DemoContent
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.ui.preview.PreviewVods
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeMotion
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
@@ -198,6 +198,30 @@ private fun heroFills(): HeroFills {
 }
 
 /**
+ * 刊头卡的骨架。
+ *
+ * 高度与圆角**照抄** [HeroCard]（`heroCardHeight` 200dp、`shapes.extraLarge` 28dp），
+ * 宽度用 `padding(end = heroPeekWidth)` 压到和 `PageSize.Fill` 算出来的第一页一样
+ * （视口 − 预告条）。这一条不能马虎：刊头是网格的**第 0 项**，它高度变了，
+ * 下面所有内容会跟着跳；而它这次是从 0 变成有内容，跳得最狠。
+ *
+ * **不画右侧的预告条。** 那 44dp 是"下一张卡被视口裁掉"的残影，加载阶段根本
+ * 没有"下一张"这回事；给它画一条 44dp 的窄块，会造出"加载中就有一张窄卡"的
+ * 错觉，比留白更可疑。留白在视觉上就等于"还没有下一张"。
+ */
+@Composable
+fun HeroSkeleton(modifier: Modifier = Modifier, staggerIndex: Int = 0) {
+    SkeletonBlock(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(end = BeeDimens.heroPeekWidth)
+            .height(BeeDimens.heroCardHeight),
+        shape = MaterialTheme.shapes.extraLarge,
+        staggerIndex = staggerIndex,
+    )
+}
+
+/**
  * hero 卡有真实封面时压的暗层。
  *
  * 三段而不是两段：顶部要压一点（刊头行里的篇次是浅色字），中间几乎全透
@@ -255,18 +279,7 @@ private fun HeroCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (hasPic) {
-                val context = LocalContext.current
-                AsyncImage(
-                    model = remember(vod.pic) {
-                        ImageRequest.Builder(context)
-                            .data(vod.pic)
-                            .crossfade(true)
-                            .build()
-                    },
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                BeePosterImage(vod.pic)
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -388,7 +401,7 @@ private fun HeroCard(
 private fun HeroCarouselPreview() {
     BeeVideoTheme(darkTheme = true) {
         HeroCarousel(
-            vods = DemoContent.vods.take(3),
+            vods = PreviewVods.vods.take(3),
             onVodClick = {},
         )
     }
@@ -405,7 +418,7 @@ private fun HeroCarouselPreview() {
 private fun HeroCarouselLightPreview() {
     BeeVideoTheme(darkTheme = false) {
         HeroCarousel(
-            vods = DemoContent.vods.take(3),
+            vods = PreviewVods.vods.take(3),
             onVodClick = {},
         )
     }

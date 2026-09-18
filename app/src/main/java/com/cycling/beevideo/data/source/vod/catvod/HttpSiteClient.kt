@@ -43,6 +43,21 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
     /** 解析详情（回应 `ac=detail`） */
     protected abstract fun parseDetail(body: String): Vod?
 
+    /**
+     * 取正文。**全类唯一的网络出口**，四个操作都从它走。
+     *
+     * 单独留一个可覆盖的方法**不是为了好看**：URL 构造（`ac` / `t` / `pg` / `wd`
+     * / `ids` / `quick` / `extend` 的取舍）是本类里**唯一不属于解析、也不属于
+     * 网络**的逻辑，而它此前完全没有覆盖 —— 只有真机上一个源一个源地试。
+     *
+     * 有了这个出口，`HttpSiteClientTest` 就能把「操作 → 参数 → URL → 解析 →
+     * 封面回填」整条跑一遍而**不发一个请求**，包括那条最容易回归的：
+     * 「首页有封面就不再多打一次 `ac=detail`」。
+     *
+     * 生产实现就是一行转发，没有任何分支。
+     */
+    protected open suspend fun fetch(url: String): String = CatVodHttp.getText(url)
+
     // ------------------------------------------------------------------
 
     override suspend fun homeContent(): HomeContent {
@@ -60,7 +75,7 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
          * 代价见 [withFullFields]：这条路径的条目字段被砍到只剩 8 个，
          * 封面得另外补一次。
          */
-        val body = CatVodHttp.getText(buildUrl(mapOf("ac" to "list")))
+        val body = fetch(buildUrl(mapOf("ac" to "list")))
         val parsed = parseHome(body)
         return HomeContent(
             categories = fromExt ?: parsed.categories,
@@ -69,7 +84,11 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
     }
 
     /**
-     * 给首页条目补全封面等信息。
+     * 给条目补全封面等信息。
+     *
+     * **首页与搜索共用这一条** —— 两处的成因是同一个：MacCMS 的非 `detail`
+     * 分支查询字段是精简集，本来就可能不含 `vod_pic`。搜索曾经漏了这一步，
+     * 于是同一个源「首页有图、搜索没图」，看起来像两个不同的问题。
      *
      * ─── 为什么非补不可 ──────────────────────────────────────────────────
      * MacCMS 的 `ac=list` 查询字段是**写死的精简集**（Provide.php 第 125 行）：
@@ -103,7 +122,7 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
                 .take(MAX_BACKFILL)
             if (ids.isEmpty()) return@runCatching vods
 
-            val body = CatVodHttp.getText(
+            val body = fetch(
                 buildUrl(mapOf("ac" to "detail", "ids" to ids.joinToString(",")))
             )
             val full = parseVods(body, categoryId = "").associateBy { it.id }
@@ -134,16 +153,50 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
                 "pg" to page.toString(),
             )
         )
-        return parseVods(CatVodHttp.getText(url), tid)
+        /*
+         * 与 [searchContent] / [homeContent] 一样过一遍 [withFullFields]。
+         *
+         * ⚠️ 这条**不是**多余的：`withFullFields` 的"逐字段回填"这个做法，
+         * 它的唯一理由就是"`categoryId` 是调用方（分类页）指定的，整条替换会把它改掉"
+         * —— 而全项目里**只有这里**会把一个非空的 `categoryId`（`tid`）传进 `parseVods`。
+         * 也就是说：不加这一句，`withFullFields` 里那段逐字段合并的理由就没有任何场景
+         * 在支撑它（首页与搜索传的都是空串）。
+         *
+         * 代价可控：`withFullFields` 在**任意一条已有封面**时直接返回，而本方法用的是
+         * `ac=videolist`（完整字段集，本来就带 `vod_pic`），所以真实站点上几乎不会
+         * 触发第二次请求；真触发时，说明这个源确实没给封面 —— 那正是它要解决的场景。
+         */
+        return withFullFields(parseVods(fetch(url), tid))
     }
 
     override suspend fun detailContent(sourceId: String): Vod? =
-        parseDetail(CatVodHttp.getText(buildUrl(mapOf("ac" to "detail", "ids" to sourceId))))
+        parseDetail(fetch(buildUrl(mapOf("ac" to "detail", "ids" to sourceId))))
 
     override suspend fun searchContent(keyword: String): List<Vod> {
         if (keyword.isBlank()) return emptyList()
-        val url = buildUrl(mapOf("ac" to "videolist", "wd" to keyword))
-        return parseVods(CatVodHttp.getText(url), categoryId = "")
+
+        /*
+         * `ac=videolist` 是**有意与参考实现分歧**的一处，记在这里免得后人当 typo 改掉：
+         *
+         * 参考 `SiteApi.searchContent` 走 HTTP 时**一个 `ac` 都不发**，只发
+         * `wd` / `quick` / `extend` / `pg` —— MacCMS 的 `provide/vod` 在只带 `wd`
+         * 时会落到默认分支，效果等价。
+         *
+         * 我们显式发 `ac=videolist`，与 [categoryContent] 保持一致：`videolist`
+         * 返回的是完整字段集（含 `vod_play_url`），而 `list` 只回精简字段。
+         * 两种写法理论上都成立，**但没有真实 type=0/1 站点上的对照实验**
+         * —— 见 `docs/coverage-gaps.md` 第 1 节。要改先做对照，别凭"参考没发"就删。
+         */
+        val url = buildUrl(
+            mapOf(
+                "ac" to "videolist",
+                "wd" to keyword,
+                // 参考在 HTTP 路径上**无条件**发 quick（`SiteApi.java:204`）。
+                "quick" to site.quickSearch.toString(),
+            )
+        )
+        // 封面补全与首页同源，别只补首页 —— 否则同一个源「首页有图、搜索没图」。
+        return withFullFields(parseVods(fetch(url), categoryId = ""))
     }
 
     override suspend fun playerContent(flag: String?, id: String): PlaySource? {
@@ -170,16 +223,52 @@ abstract class HttpSiteClient(override val site: SiteConfig) : SiteClient {
      *
      * 用 `HttpUrl` 而不是手拼字符串：手拼很容易在 `?` 和 `&` 上出错
      * （base 里已有 query 时再加 `?` 就成了第二个问号，服务端只读第一个）。
+     *
+     * `extend` 由 [extendOf] 决定要不要带上 —— 参考实现是**每次**请求都带
+     * （`SiteApi.call` 第一行），所以放在这里而不是各个调用点，只有一处要维护。
      */
-    protected fun buildUrl(overrides: Map<String, String>): String {
-        val url = site.api.toHttpUrlOrNull() ?: return site.api
-        val builder = url.newBuilder()
-        // 这些键由本次操作决定，先全删再放，避免出现 `ac=list&ac=detail`
-        listOf("ac", "t", "pg", "wd", "ids").forEach { builder.removeAllQueryParameters(it) }
-        overrides.forEach { (k, v) -> builder.addQueryParameter(k, v) }
-        return builder.build().toString()
-    }
+    protected fun buildUrl(overrides: Map<String, String>): String =
+        buildMacCmsQuery(site.api, overrides + extendOf(site.ext))
 }
+
+/**
+ * MacCMS 的语义参数。每次操作由调用方重新决定，所以先全删再放 ——
+ * 否则 base 里写死的 `ac=list` 和新加的 `ac=detail` 会同时出现在 URL 上，
+ * 服务端只读第一个，症状是「参数改了但行为没变」。
+ */
+internal val MAC_CMS_QUERY_KEYS =
+    listOf("ac", "t", "pg", "wd", "ids", "quick", "extend")
+
+/**
+ * 把 [overrides] 覆盖到 [api] 上，保留其它 query（很多源靠一个 token 参数鉴权，
+ * 清掉就全废了）。**纯函数**，单测直接打这里，不用起网络。
+ */
+internal fun buildMacCmsQuery(api: String, overrides: Map<String, String>): String {
+    val url = api.toHttpUrlOrNull() ?: return api
+    val builder = url.newBuilder()
+    MAC_CMS_QUERY_KEYS.forEach { builder.removeAllQueryParameters(it) }
+    overrides.forEach { (k, v) -> builder.addQueryParameter(k, v) }
+    return builder.build().toString()
+}
+
+/**
+ * `ext` 要不要作为 `extend` 透传给站点。
+ *
+ * ⚠️ **本项目与参考实现有意分歧的一处。** 参考 `SiteApi.call` 在 `ext` 非空时
+ * 无条件把它塞进 `extend`；而本项目额外把 `ext` 当作**分类映射**用
+ * （见 [parseCategoriesFromExt]：`{"class":[…]}` 或 `{"1":"电影"}`，
+ * 应对某些源的 `ac=list` 不吐 `class` 的情况）。
+ *
+ * 那份分类表已经被本地消费掉了，再原样发给站点就是**喂错东西** ——
+ * 服务端拿到一个 `{"class":[…]}` 并不认识。所以判据是：
+ * **能解析成分类映射的就不透传，其余（token / 过滤串）照常透传。**
+ */
+internal fun extendOf(ext: String): Map<String, String> =
+    if (ext.isBlank() || parseCategoriesFromExt(ext) != null) {
+        emptyMap()
+    } else {
+        mapOf("extend" to ext)
+    }
 
 /**
  * 从 `ext` 里读分类。

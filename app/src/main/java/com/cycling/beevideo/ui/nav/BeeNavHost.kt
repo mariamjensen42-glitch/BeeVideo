@@ -1,5 +1,6 @@
 package com.cycling.beevideo.ui.nav
 
+import android.net.Uri
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -42,23 +44,54 @@ import androidx.navigation.navArgument
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.LibraryRepository
+import com.cycling.beevideo.domain.repository.MediaCache
+import com.cycling.beevideo.domain.repository.PlaybackSettings
+import com.cycling.beevideo.domain.repository.ThemeSettings
 import com.cycling.beevideo.ui.detail.DetailScreen
 import com.cycling.beevideo.ui.home.HomeScreen
 import com.cycling.beevideo.ui.keep.KeepScreen
 import com.cycling.beevideo.ui.player.PlayerScreen
+import com.cycling.beevideo.ui.search.SearchScreen
 import com.cycling.beevideo.ui.settings.SettingsScreen
 
 object Routes {
     const val HOME = "home"
     const val KEEP = "keep"
     const val SETTINGS = "settings"
+
+    /**
+     * 搜索。**不是**顶层 tab —— 它从首页顶栏的 action 进入，返回即回到首页。
+     *
+     * 不加成第四个底栏项：`ShortNavigationBar` 的官方口径是 3–5 项，
+     * 但手机竖屏下四项的中文标签会被挤到换行/截断。搜索是"任务"而不是"区域"，
+     * 按 M3 的做法应该由入口 action 打开。
+     */
+    const val SEARCH = "search"
     const val DETAIL = "detail/{vodId}"
     const val PLAYER = "player/{vodId}/{lineIndex}/{episodeIndex}"
 
-    fun detail(vodId: String): String = "detail/$vodId"
+    /*
+     * vodId **必须 Uri.encode 进路由**，否则点进去直接闪退回桌面。
+     *
+     * vodId 的格式是 `siteKey:sourceId`，冒号是格式的一部分；sourceId 又常是
+     * `/vod-detail-id-95012.html` 这种带斜杠的路径。而导航图把 `{vodId}` 编译成
+     * 的正则是 `([^/]*?|)`（见 NavDeepLink.PATH_REGEX）—— 吃不下斜杠，于是
+     * `navigate("detail/糯米:/vod-detail-id-95012.html")` 匹配失败，抛
+     * `IllegalArgumentException: Navigation destination ... cannot be found`，
+     * 主线程当场崩。报错信息里那句「cannot be found」看着像路由没注册，
+     * 其实路由好好的，是**值**把路径撑破了。
+     *
+     * 编码后只剩 `[A-Za-z0-9_-!.~'()*%]`，不含斜杠、冒号、`?`、`#`，必然匹配。
+     *
+     * ⚠️ 读取的那一端**不要再 decode 一次**：NavDeepLink 取 path 参数时会走
+     * NavUriUtils.decode（= android.net.Uri.decode）再放进 Bundle，值已经是原文。
+     * 手抖补一次 decode，只会把原文里的 `%` 当转义吃掉 —— 双重解码比不编码还糟。
+     */
+    fun detail(vodId: String): String = "detail/${Uri.encode(vodId)}"
 
     fun player(vodId: String, lineIndex: Int, episodeIndex: Int): String =
-        "player/$vodId/$lineIndex/$episodeIndex"
+        "player/${Uri.encode(vodId)}/$lineIndex/$episodeIndex"
 }
 
 /**
@@ -103,6 +136,10 @@ private fun destinationIcon(destination: TopDestination, selected: Boolean): Ima
 fun BeeNavHost(
     content: ContentRepository,
     sources: ContentSourceRepository,
+    library: LibraryRepository,
+    settings: PlaybackSettings,
+    mediaCache: MediaCache,
+    theme: ThemeSettings,
     navController: NavHostController = rememberNavController(),
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -221,24 +258,67 @@ fun BeeNavHost(
                     sources = sources,
                     onVodClick = { vod -> navController.navigate(Routes.detail(vod.id)) },
                     onOpenSettings = { navController.navigateTopLevel(TopDestination.SETTINGS) },
+                    onOpenSearch = { navController.navigate(Routes.SEARCH) },
                 )
             }
 
             composable(Routes.KEEP) {
-                KeepScreen()
+                KeepScreen(
+                    library = library,
+                    onVodClick = { vodId -> navController.navigate(Routes.detail(vodId)) },
+                )
             }
 
             composable(Routes.SETTINGS) {
-                SettingsScreen(sources = sources)
+                /*
+                 * 外观模式的「订阅 → 传值 / 写回」落在这一层。
+                 *
+                 * 设置页只收一个值和一支回调（理由见 `SettingsScreen` 的说明）：
+                 * 它不需要知道这东西存在磁盘上、也不需要知道谁在监听。
+                 *
+                 * 这里读到的 `mode` 和 `MainActivity` 读的是**同一条流**，
+                 * 所以点一下选项 → `set()` 写流 → 顶层的 `BeeVideoTheme`
+                 * 换配色 → 本页重组拿到新选中态，一个来回就收敛了，不用
+                 * 在本页做乐观更新。
+                 */
+                val mode by theme.mode.collectAsStateWithLifecycle()
+                SettingsScreen(
+                    sources = sources,
+                    settings = settings,
+                    cache = mediaCache,
+                    themeMode = mode,
+                    onThemeModeChange = theme::set,
+                )
+            }
+
+            /*
+             * 搜索页。
+             *
+             * 用 `navigate`（入栈）而不是 `navigateTopLevel` —— 它是首页之上的
+             * 一层，返回键回到首页，而不是在三个 tab 之间跳。
+             *
+             * 也因此它**不在** TAB_ROUTES 里：`isTabSwitch` 会判定首页 → 搜索
+             * 是"前进"，于是走 `pageEnter`（小位移横滑 + 淡入），返回时反向。
+             * 如果漏了这一步、让它落进 TAB_ROUTES 的判据，转场会退化成纯淡入，
+             * 看不出层级关系。
+             */
+            composable(Routes.SEARCH) {
+                SearchScreen(
+                    content = content,
+                    onVodClick = { vod -> navController.navigate(Routes.detail(vod.id)) },
+                    onBack = { navController.popBackStack() },
+                )
             }
 
             composable(
                 route = Routes.DETAIL,
                 arguments = listOf(navArgument("vodId") { type = NavType.StringType }),
             ) { entry ->
+                // 这里拿到的已经是解码后的原文，别再加 Uri.decode（见 Routes 的注释）。
                 val vodId = entry.arguments?.getString("vodId").orEmpty()
                 DetailScreen(
                     content = content,
+                    library = library,
                     vodId = vodId,
                     onBack = { navController.popBackStack() },
                     onPlay = { lineIndex, episodeIndex ->
@@ -255,11 +335,14 @@ fun BeeNavHost(
                     navArgument("episodeIndex") { type = NavType.IntType },
                 ),
             ) { entry ->
+                // 同上：已解码。
                 val vodId = entry.arguments?.getString("vodId").orEmpty()
                 val lineIndex = entry.arguments?.getInt("lineIndex") ?: 0
                 val episodeIndex = entry.arguments?.getInt("episodeIndex") ?: 0
                 PlayerScreen(
                     content = content,
+                    library = library,
+                    settings = settings,
                     vodId = vodId,
                     lineIndex = lineIndex,
                     episodeIndex = episodeIndex,

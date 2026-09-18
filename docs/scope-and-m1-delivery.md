@@ -5,6 +5,10 @@
 > 变更：
 > - 2026-09-14 移除直播能力（频道清单、分组与节目单），不做为独立功能域
 > - 2026-09-14 依据本地实况重写参考项目章节（TV-Multiplatform 已确认存在）
+> - 2026-09-16 **JS 爬虫引擎由"二期 / 不做"改为"已实现"**（有意扩展）。原计划里
+>   "Jar / JS / Python 爬虫引擎"统一排除，实际实现中 **Jar 与 JS 都已落地**，
+>   只剩 Python 仍不支持。§3.3、§5、§6.2 的相关表述已同步修正，避免文档与
+>   代码互相打脸。理由与代价见 §3.3 的注。
 
 ## 0. 一句话定位
 
@@ -21,7 +25,7 @@ BeeVideo 是一个**可插拔的播放器外壳**：App 自身不持有、不分
 
 | 项目 | 位置 | 技术栈 | 许可 |
 |---|---|---|---|
-| **FongMi/TV**（原称 fonmi/TV） | 本地未获取 | Android，XML View + Leanback + Groovy DSL；模块 `:app` `:catvod` `:chaquo` `:quickjs` | **GPL-3.0** |
+| **FongMi/TV**（原称 fonmi/TV） | `D:\Programming\Kotlin\TV-fongmi`（2026-09-16 取得） | Android，XML View + Leanback + Groovy DSL；模块 `:app` `:catvod` `:chaquo` `:quickjs` | **GPL-3.0** |
 | **TV-Multiplatform** | `D:\Programming\Kotlin\TV-Multiplatform-main` | Compose Multiplatform 1.10.0 / Kotlin 2.3.0；模块 `:composeApp` `:Web-Player`；**target 仅 `jvm("desktop")`** | **GPL-3.0** |
 
 两份 `LICENSE` 均为 GPLv3 全文（35,149 字节）。
@@ -144,7 +148,24 @@ DLNA 投放、Android Auto、本地 HTTP 控制 API、TV/Leanback 端。
 | 类型 | 说明 | 首版 |
 |---|---|---|
 | **点播源配置** | 解析 JSON 配置与分类/详情/搜索接口。App 不内置、不推荐、不分发 | 做导入与解析 |
-| **扩展爬虫** | 动态加载 Jar 或执行 JS / Python 脚本，需 QuickJS + Chaquopy | 二期 |
+| **扩展爬虫（Jar）** | `DexClassLoader` 动态加载 jar，反射调用 `com.github.catvod.crawler.Spider` 子类 | 已做 |
+| **扩展爬虫（JS）** | QuickJS 执行 drpy 系 `.js` 爬虫。**原计划列为二期，实际已实现**（见下注） | 已做（有意扩展） |
+| **扩展爬虫（Python）** | Chaquopy 执行 `.py` 爬虫 | 二期（受阻：需 Python 3.10） |
+
+> **为什么 JS 提前做了、Python 没做**：这两件事的成本不对称。JS 引擎可以用
+> 一个纯 Gradle 依赖（`quickjs-android`，自带 `.so`）完成，宿主只需实现
+> "源码怎么取、`import` 怎么解析、`req`/`res`/`global` 这些 JS 侧全局怎么映射"，
+> 全部是 Kotlin 代码；而 Python 要 Chaquopy 编译器插件 + 与宿主一致的 Python
+> 小版本，本机没有 3.10，装一个还会改掉构建方式。
+>
+> JS 侧落地位置：`data/source/vod/js/`（11 个类）——`JsSpider` 继承的是**同一个**
+> `com.github.catvod.crawler.Spider`，所以对上层（`JarSiteClient` / 站点缓存 /
+> 本地代理派发）来说它与 jar 爬虫完全等价，没有第二套调用约定。这正是
+> 参考实现的引擎分派方式：**引擎不同，契约相同。**
+>
+> ⚠️ 代价说清楚：它把"宿主必须正确模拟 JS 侧的 `req`/`res`/`global` 语义"
+> 变成了长期维护面 —— 一个 drpy 源跑不起来时，失败点在 JS 内部，堆栈不是
+> Kotlin 的。Python 侧若将来上马，要按同样标准评估。
 
 ---
 
@@ -167,8 +188,8 @@ DLNA 投放、Android Auto、本地 HTTP 控制 API、TV/Leanback 端。
 | 2 | **技术栈不匹配** | FongMi/TV 是 XML View + Leanback + Groovy；BeeVideo 是 Compose + KTS。UI 层无法复用，须重写 |
 | 3 | **参考项目无安卓 target** | TV-Multiplatform 仅 `jvm("desktop")`，播放层为 vlcj，无法直接用于安卓 |
 | 4 | **配套 AAR 缺失** | FongMi/TV 的播放器内核位于 `app/libs/lib-*.aar`，经 `flatDir` 引用且**未纳入 Git**。单纯 clone 无法编译 |
-| 5 | **Java 爬虫体系的语言鸿沟** | 参考实现用 `JarLoader` 动态加载 Java 爬虫；安卓端可直接沿用该思路，但 JS / Python 需 QuickJS 与 Chaquopy |
-| 6 | **Chaquopy 需 Python 3.10** | `com.chaquo.python:17.0.0`；本机为 Python 3.14.6 / 3.13.12，无 3.10 |
+| 5 | **Java 爬虫体系的语言鸿沟** | 参考实现用 `JarLoader` 动态加载 Java 爬虫；安卓端同思路已落地（`DexClassLoader`）。**JS 侧已用 QuickJS 落地**；仅 Python 需 Chaquopy 而未做 |
+| 6 | **Chaquopy 需 Python 3.10** | `com.chaquo.python:17.0.0`；本机为 Python 3.14.6 / 3.13.12，无 3.10。**这是 Python 爬虫不做的唯一实质阻碍** |
 | 7 | **minSdk 分歧** | FongMi/TV 为 API 24，BeeVideo 现为 **31** |
 | 8 | **软解内核需替代方案** | 自编 FFmpeg AAR 成本高；可改用 libVLC（见 1.4） |
 
@@ -209,9 +230,19 @@ TV-Multiplatform 用 Kotlin 2.3.0，高于本项目的 2.2.10，仅参考其设�
 
 ### 6.2 不含
 
-**直播频道与节目单**、Jar / JS / Python 爬虫引擎、多源聚合搜索、
-WebDAV / SMB / DLNA、弹幕、投屏与 DLNA 接收端、
-Android Auto 与本地 HTTP 控制 API、账号体系与云端同步、TV 与 Leanback 端。
+**直播频道与节目单**、Python 爬虫引擎、WebDAV / SMB / DLNA、弹幕、
+投屏与 DLNA 接收端、Android Auto 与本地 HTTP 控制 API、
+账号体系与云端同步、TV 与 Leanback 端。
+
+> 2026-09-16 修正：原列表里还有「Jar / JS / Python 爬虫引擎」与「多源聚合搜索」，
+> **这两项现已实现，故从"不含"里移除**：
+> - Jar 与 JS 引擎 → 见 §3.3 的注；
+> - 多源聚合搜索 → `VodContentRepository.search()` 已并行搜所有 `searchable` 源
+>   （`supervisorScope`，单源失败不影响整体，`distinctBy(名称)` 去重，
+>   并把「实搜几个 / 可搜几个」一起返回给界面，避免静默截断）。
+>
+> 仍属"不含"的只剩 **Python 爬虫**（唯一阻碍是 Chaquopy 需 Python 3.10，
+> 见 §3.3）。**不要**因为这份文档曾把它们写成"二期"，就在实现里重新加回排除逻辑。
 
 ### 6.3 验收口径
 
@@ -274,17 +305,30 @@ com.cycling.beevideo/
 
 ### 组件约定：槽位优先
 
-`ui/components/` 里的组件一律**槽位（slot）优先**，不把内容写死成字符串参数：
+`ui/components/` 里的组件一律**槽位（slot）优先**，不把内容写死成字符串参数。
+当前**实际存在**的组件：
 
-| 组件 | 槽位 |
+| 组件 | 形态 |
 |---|---|
-| `BeePage` | `topBar` —— 顶栏可换、可空；另提供 `title/onBack/actions` 便利重载 |
-| `BeeTopBar` | `navigation` / `title` / `actions` —— 三个槽位全部可替换 |
-| `BeeTopBarDefaults` | `BackButton`（文字）/ `BackIcon`（图标）/ `Title`，可作自定义起点 |
-| `SectionTitle` | slot 版 + 纯文本便利重载 |
-| `BeeEmptyState` | slot 版（可放插图/按钮）+ 纯文本便利重载 |
-| `BeeChipRow<T>` | 泛型；`label` 决定每一项外观 |
+| `ContainmentBlock` | 槽位 `content` —— M3 containment 的圆角块，详情页与播放页共用（外边距由调用点给） |
+| `BeeChipRow<T>` | 泛型 + 槽位 `label` —— 每一项外观由调用方决定 |
+| `BeeCenteredNotice` | 文本 + `fillHeight` —— 「网格里的一行」与「整屏空态」两种尺寸行为，**是有意的差别，不是重复** |
+| `BeeBackButton` | 固定按钮（图标 + `cd_back`）—— 三处顶栏共用 |
+| `LoadState` / `loadState()` | 加载三态 + 按 key 重取（键变即取消上一发） |
+| `Shimmer`（`SkeletonBlock` / `SkeletonPosterGrid` / `SkeletonChipRow` / `Modifier.shimmerGlint`） | 骨架屏 |
+| `PosterCard` / `HeroCarousel` | 海报卡与刊头 |
+| `MetaLine`（`metaLine` / `scorePart`） | 元信息拼接；缺字段时不留孤零零的分隔符 |
+| `BeeTopBarColors`（`beeTopAppBarColors()`） | 顶栏容器色，与页面底色同源 |
+
+> **2026-09-17 更正**：本节此前列了 `BeePage` / `BeeTopBar` / `BeeTopBarDefaults` /
+> `SectionTitle` / `BeeEmptyState` 五个组件，并写明它们各有槽位 —— **它们从未被实现**。
+> 顶栏一直是各页自己写的，返回按钮因此被抄了三遍（直到 `BeeBackButton` 收口）。
+>
+> 教训不是"当时应该先实现"，而是**文档里写了未来的组件，读的人会以为它们已经在了**：
+> 做架构评审时去找 `BeeTopBarDefaults`，找到的是空白。
 
 **反面例子（已修正）**：早期版本写作 `BeeTopBar(title: String, onBack: ...)`，
 标题只能是字符串、返回只能是文字按钮 —— 想做「图标返回 + 双行标题 + 头像」
 就无路可走。这种抽象一旦推广到全项目，改起来比不抽还贵。
+（上面那批"大而全"的名字最终都没有落地；留下的反而是 `BeeBackButton`
+这种**只做一件小事**的组件 —— 它们才真的被复用了。）

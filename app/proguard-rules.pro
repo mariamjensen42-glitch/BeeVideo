@@ -106,3 +106,42 @@
 # 类名本来就没混淆（§2），所以这里只需要处理 SourceFile 属性。
 -keepattributes SourceFile, LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# ─── §7 Room：数据库实现类是**反射找出来**的 ───────────────────────────────
+# `Room.databaseBuilder(...).build()` 内部是 `Class.forName("<包名>.<Database>_Impl")`
+# —— 名字在字符串里、构造器靠反射调用，与 §1 / §4 同一类风险：R8 在字节码里看不到引用，
+# 可以合法判定它是死代码。
+#
+# Room 的 AAR 自带 consumer 规则 `-keep class * extends androidx.room.RoomDatabase
+# { void <init>(); }`，AGP 会自动合并，所以**默认其实是安全的**。显式再写一遍的理由同 §4：
+# 前提藏在 AAR 里，读本文件的人看不到；它一旦变了，症状是「数据库一打开就 FATAL」，
+# 而且**只在 release 上出现**（debug 不做裁剪）。写下来代价为零。
+#
+# 用 `{ *; }` 而不是只保构造器：生成的 `_Impl` 里还有 DAO 工厂方法，一共就两个类，保全量。
+-keep class * extends androidx.room.RoomDatabase { *; }
+
+# ─── §8 JS 爬虫引擎：方法名是**反射**查出来的 ──────────────────────────────
+# JS 引擎把宿主能力暴露给 JS 的方式是：
+#
+#     for (Method m : getClass().getMethods())
+#         if (m.isAnnotationPresent(JSMethod.class))
+#             ctx.getGlobalObject().setProperty(m.getName(), args -> m.invoke(this, args));
+#
+# 也就是说 `Global` / `Local` 上那些 `@JSMethod` 方法**全部靠反射调用**，
+# R8 在字节码里看不到任何一条直接引用 —— 和 §1 的 jar 情况完全同构，
+# 只是这次"外部调用方"是 JS 脚本。
+#
+# 症状同样是"编译通过、启动正常，一跑 .js 源就炸"：
+# `aesX is not a function` / `local.get is not a function`，
+# 报错全在 JS 侧，指不到"宿主把方法删了"。
+#
+# §2 的 `-dontobfuscate` 只保**名字**，保不住"没人调用"的方法被删 —— 所以这条必须有。
+-keep class com.cycling.beevideo.data.source.vod.js.** { *; }
+# 被注入到 JS 全局对象上的 `local`（见 JsEngine.createContext 的 setProperty）。
+# 它在上面的包下，规则已覆盖；这里显式再写一条是因为它与 `Global` 不同 ——
+# 它是**整个类的静态方法表**被扫，任何私有辅助方法都不能被内联掉。
+-keepclassmembers class com.cycling.beevideo.data.source.vod.js.** { @* *; }
+
+# QuickJS 绑定本身也要保：native 层按名字回调 Java（`invokeMethod` / `hold` / `release`）。
+-keep class com.whl.quickjs.** { *; }
+-dontwarn com.whl.quickjs.**

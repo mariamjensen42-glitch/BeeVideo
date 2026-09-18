@@ -7,6 +7,7 @@
     <string name="cd_back">返回</string>
     <string name="cd_close">关闭</string>
     <string name="dialog_close">关闭</string>
+    <string name="dialog_cancel">取消</string>
 
     <!-- 顶层导航 -->
     <string name="nav_home">首页</string>
@@ -34,10 +35,28 @@
     <string name="home_retry">重试</string>
     <string name="home_source_failed_title">内容源装载失败</string>
 
+    <!-- 搜索 -->
+    <string name="search_title">搜索</string>
+    <string name="search_action">搜索</string>
+    <string name="search_placeholder">输入片名</string>
+    <string name="search_clear">清空</string>
+    <string name="search_hint">输入片名，在所有可搜索的来源里找</string>
+    <string name="search_loading">正在搜索…</string>
+    <string name="search_result_count">找到 %1$d 部</string>
+    <string name="search_no_result">没有找到「%1$s」</string>
+    <string name="search_failed">搜索失败：%1$s</string>
+    <!-- 跨源搜索有站点上限，必须让"少搜了一部分"可见（见 SearchOutcome） -->
+    <string name="search_coverage">已搜索 %1$d / %2$d 个源</string>
+    <string name="search_no_searchable">当前来源里没有可搜索的站点</string>
+
     <!-- 收藏 -->
     <string name="keep_title">收藏</string>
+    <string name="keep_loading">正在读取收藏…</string>
     <string name="keep_empty_title">还没有收藏</string>
-    <string name="keep_empty_body">收藏能力尚未实现，当前版本只提供内容源的浏览与播放。</string>
+    <string name="keep_empty_body">在详情页点右上角的书签图标即可收藏。收藏只存在本机，不会上传。</string>
+    <string name="keep_load_failed">读取收藏失败：%1$s</string>
+    <string name="cd_keep_add">收藏</string>
+    <string name="cd_keep_remove">取消收藏</string>
 
     <!-- 设置 -->
     <string name="settings_title">设置</string>
@@ -49,8 +68,26 @@
     <string name="settings_source_clear">清除</string>
     <string name="settings_source_loading">正在读取配置…</string>
     <string name="settings_source_active">当前来源</string>
+    <string name="settings_section_cache">播放缓存</string>
+    <string name="settings_cache_body">看过的内容会留一份在本机，重复观看和拖回去重看都不再走网络。超出上限时自动清理最久没看的。缓存只存在本机，不会上传。</string>
+    <string name="settings_cache_switch">启用缓存</string>
+    <string name="settings_cache_quota">占用上限</string>
+    <string name="settings_cache_quota_gb">%1$d GB</string>
+    <string name="settings_cache_used">已用 %1$s</string>
+    <string name="settings_cache_used_off">缓存已关闭，当前占用 %1$s</string>
+    <string name="settings_cache_clear">清空缓存</string>
+    <string name="settings_cache_clear_title">清空播放缓存？</string>
+    <string name="settings_cache_clear_body">已下载的内容会被删除，下次播放重新下载。</string>
+    <string name="settings_cache_clear_confirm">清空</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_about_body">BeeVideo 是一个播放器外壳，只负责播放与本地媒体管理，覆盖范围是视频点播与本地播放。</string>
+
+    <!-- 外观 -->
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_appearance_body">深浅色默认跟随系统。选定这一项后本机记住，重开 App 仍然生效。</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
 
     <!-- 详情 -->
     <string name="detail_not_found">条目不存在</string>

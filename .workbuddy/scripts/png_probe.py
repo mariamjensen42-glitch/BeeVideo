@@ -10,7 +10,13 @@ import sys
 import zlib
 
 
-def read_png(path):
+def read_png(path, max_rows=None):
+    """解出一张 PNG。返回 (width, height, channels, pixels)。
+
+    [max_rows] 只反滤波前 N 行 —— PNG 的滤波是**逐行依赖**的，所以想省时间
+    只能从头截断，不能只解中间。追踪某一行像素时很有用：全图 1080×2400 在
+    纯 Python 下要几秒，截到目标行差不多快一半。
+    """
     with open(path, "rb") as handle:
         data = handle.read()
 
@@ -36,10 +42,11 @@ def read_png(path):
     channels = {0: 1, 2: 3, 4: 2, 6: 4}[color_type]
     raw = zlib.decompress(bytes(idat))
     stride = width * channels
-    out = bytearray(height * stride)
+    rows = height if max_rows is None else min(height, max_rows)
+    out = bytearray(rows * stride)
     prev = bytearray(stride)
 
-    for row in range(height):
+    for row in range(rows):
         start = row * (stride + 1)
         filter_type = raw[start]
         line = bytearray(raw[start + 1 : start + 1 + stride])

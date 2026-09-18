@@ -1,4 +1,4 @@
-package com.cycling.beevideo.data.demo
+package com.cycling.beevideo.ui.preview
 
 import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.Episode
@@ -7,7 +7,7 @@ import com.cycling.beevideo.domain.model.Vod
 import com.cycling.beevideo.domain.repository.ContentRepository
 
 /**
- * 预览稿用的演示数据。
+ * 预览稿用的示例内容。
  *
  * ⚠️ **不是 App 的运行数据源**：首页在没有配置来源时显示空态，不会退回这里
  * （产品定位是播放器外壳，塞一份假内容进去等于假装有源）。
@@ -17,8 +17,16 @@ import com.cycling.beevideo.domain.repository.ContentRepository
  *
  * 真实来源会给出封面地址，这里一律留空，封面走 `posterBrush()` 生成的渐变占位 ——
  * 预览稿正好用它来检查占位样式本身。
+ *
+ * ─── 为什么在 ui/preview/ 而不是 data/ ────────────────────────────────
+ * 它以前住在 `data/demo/`，于是**每个预览都让 ui 在编译期依赖 data** ——
+ * 架构图里不存在的一条边，代码里处处都在。而 `docs/scope-and-m1-delivery.md`
+ * 的依赖方向写得很硬：`ui → domain ← data`。
+ *
+ * 搬到 ui 这边之后它同时变成 JVM 测试可用的夹具（`app/src/test` 看得见 main），
+ * 一份东西两用，而不是各留一份。
  */
-object DemoContent {
+object PreviewVods {
 
     /**
      * 公开测试流，仅用于验证播放内核可用。

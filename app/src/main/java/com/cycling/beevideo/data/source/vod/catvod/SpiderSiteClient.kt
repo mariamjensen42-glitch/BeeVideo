@@ -7,9 +7,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * type=3 / type=4：走 jar 的 spider 站点。
+ * 任何由 `com.github.catvod.crawler.Spider` 驱动的站点 —— **jar 的与 `.js` 的都在内**。
  *
- * 这里的活儿只有两件 —— **反射调用**，以及**把返回的 JSON 交给统一解析器**。
+ * 名字里的 "jar" 曾经是误导：类诞生于 jar 的场景，但它服务的是**任何 Spider 子类**。
+ * JS 引擎能"零成本"接进现有的缓存 / 派发 / 释放链路，靠的正是 `JsSpider` 继承了同一个基类。
+ * 它只把 `spider` 当成一个接口用，所以叫什么名字的爬虫都一样。
+ *
+ * 这里的活儿只有两件 —— **调用 spider**，以及**把返回的 JSON 交给统一解析器**。
  * 没有第三件事：协议规定 spider 的返回值与内建 JSON 源同构，所以拿到 JSON
  * 之后的路和 [JsonSiteClient] 完全一样。
  *
@@ -19,9 +23,13 @@ import kotlinx.coroutines.withContext
  * 这一层是它们与 App 之间唯一的闸门，漏出去一个就是一个崩溃。
  * 所以 [call] 里 catch 的是 `Throwable` 而不是 `Exception`。
  */
-class JarSiteClient(
+class SpiderSiteClient(
     override val site: SiteConfig,
-    private val spider: Spider,
+    /**
+     * 本地代理服务按 `siteKey` 派发时要能拿到它 —— 见 `CatVodProxyDispatcher`。
+     * 其余地方一律只经 [SiteClient] 的接口访问，不直接碰这个字段。
+     */
+    internal val spider: Spider,
     flags: List<String>,
 ) : SiteClient {
 
@@ -97,8 +105,13 @@ class JarSiteClient(
              *
              * 本项目搜索暂不分页，所以恒等价于原版 `page == "1"` 这条分支。
              * 将来要翻页时，记得照原版：只有 `page != "1"` 才走三参版。
+             *
+             * `quick` 取配置里的 `quickSearch`（`site.quickSearch`），不写死 false：
+             * 它是爬虫的语义开关（快速搜索通常只查标题、不翻详情），配置里标了
+             * `quickSearch: 1` 就是想让它生效。之前恒传 false 等于把这个字段吞了
+             * —— 解析了、存下来了、没有任何地方读它。
              */
-            val json = spider.searchContent(keyword, false)
+            val json = spider.searchContent(keyword, site.quickSearch)
             CatVodResponse.parseVods(json, site.key, categoryId = "")
         }
     }
@@ -108,8 +121,13 @@ class JarSiteClient(
             CatVodResponse.parsePlayer(spider.playerContent(flag, id, vipFlags))
         }
 
-    /** 站点被移除时调用。spider 的 `destroy` 里通常会关连接池、停线程。 */
-    fun destroy() {
+    /**
+     * 站点被移除 / 换配置时调用。spider 的 `destroy` 里通常会关连接池、停线程。
+     *
+     * 实现 [SiteClient.close] 而不是自己另起一个名字，是为了让"释放"这件事
+     * **留在 seam 上** —— 否则调用方（工厂）就得知道具体实现是谁。
+     */
+    override fun close() {
         runCatching { spider.destroy() }
     }
 

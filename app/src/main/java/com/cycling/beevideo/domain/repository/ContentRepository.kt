@@ -2,6 +2,7 @@ package com.cycling.beevideo.domain.repository
 
 import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.PlayTarget
+import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
 
 /**
@@ -30,8 +31,16 @@ interface ContentRepository {
     /** 取单条详情；源站确认不存在时返回 null */
     suspend fun detail(vodId: String): Vod?
 
-    /** 搜索；空关键词返回空列表 */
-    suspend fun search(keyword: String): List<Vod>
+    /**
+     * 搜索。
+     *
+     * 返回 [SearchOutcome] 而不是裸列表：搜索是**跨源**的，而一次请求只打得动
+     * 有限个站点（见 [SearchOutcome] 的说明）。用户需要知道"是不是只搜了一部分源"，
+     * 否则无结果时无法区分「真的没有」和「我们少搜了」。
+     *
+     * 空关键词返回 [SearchOutcome.EMPTY]，不发任何请求。
+     */
+    suspend fun search(keyword: String): SearchOutcome
 
     /**
      * 把剧集的播放标识兑换成真正能交给播放器的目标。

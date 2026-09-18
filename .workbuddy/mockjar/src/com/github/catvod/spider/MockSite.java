@@ -48,6 +48,10 @@ import java.util.List;
  *   7. **只覆盖两参的 {@code searchContent}**，故意不覆盖三参版。
  *      宿主按原版语义调两参版；三参版的基类默认实现返回空串（也是原版行为）。
  *
+ *   8. **同一 jar 里还有静态的 {@link Proxy}**（同包，另一个文件）。宿主必须在
+ *      加载 jar 时把它反射缓存起来，否则本地代理服务那条链路没有人可派发 ——
+ *      补它之前，那条分支的条目数恒为 0，等于没测。见 {@link Proxy} 的类注释。
+ *
  * 它把 HTTP 请求打回同一个 mock 服务（`/api.php/provide/vod/`），也就是
  * "jar 里的代码 → 宿主网络层 → mock 服务 → 解析 → 返回给宿主"这条完整回路。
  */
@@ -188,15 +192,34 @@ public class MockSite extends Spider {
     /**
      * 播放地址。
      *
-     * 传入的 id 本身就是 mock 数据里的 m3u8 地址，直接回给它 —— 这样这条链路
+     * 默认传入的 id 本身就是 mock 数据里的 m3u8 地址，直接回给它 —— 这样这条链路
      * 验证的是"jar 能被调用、返回值能被解析"，而不是"能不能猜对某家站点的兑换规则"。
+     *
+     * ─── ext 里写了 `proxy` 的站点：改成发**自指代理地址** ──────────────
+     * 这是真实 jar 发播放地址的真正形态：不直接给媒体地址，而是
+     * `http://127.0.0.1:<port>/proxy?do=m3u8&url=<真实地址>`，把播放器指回宿主，
+     * 由宿主再交回本 jar 的静态 {@link Proxy}。
+     *
+     * 之所以挂在 ext 上而不是无条件改：不加 ext 的站点行为必须**逐字不变** ——
+     * 首页/详情/搜索/直链播放那几条链路都已经在真机上验过了，为了测代理去动它们
+     * 的返回值，等于拿已通过的验证去换未通过的验证。
+     *
+     * 用**全限定名**调 `com.github.catvod.Proxy`：本类所在包里现在也有一个叫
+     * `Proxy` 的类（{@link Proxy}，就是那个静态钩子），写 `Proxy.getUrl(true)`
+     * 会解析到**同一个包**的那一个 —— 编译期就可能报错，或者更糟：静默地
+     * 调到了另一个类上。
      */
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) {
         JSONObject out = new JSONObject();
         try {
+            String url = id == null ? "" : id;
+            if ("proxy".equals(extSeen.trim())) {
+                url = com.github.catvod.Proxy.getUrl(true)
+                        + "?do=m3u8&url=" + URLEncoder.encode(url, "UTF-8");
+            }
             out.put("parse", 0);
-            out.put("url", id == null ? "" : id);
+            out.put("url", url);
             out.put("header", "");
         } catch (Exception e) {
         }

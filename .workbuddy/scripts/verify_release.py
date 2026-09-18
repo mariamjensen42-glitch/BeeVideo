@@ -99,6 +99,21 @@ def surface(apk_path, prefixes):
     return result, all_classes, len(dexes)
 
 
+def is_synthetic_member(sig):
+    """R8 生成 / 删空的**合成**成员 —— 不算「ABI 被削」。
+
+    `$r8$lambda$…` / `$$ExternalSyntheticLambda…` 是 lambda 去糖的产物：R8 把
+    lambda 内联回调用方之后，承载它的那个合成类自然消失。**没有任何外部调用方
+    指望它们** —— 它们的名字本身就是编译器实现细节，换个编译器版本就变。
+    把它们当成"成员被删"会淹掉真正的信号（实测 1d / 2c 报出来的 8 条**全是**这一类）。
+
+    `<clinit>` 同 §1b 的已知例外：R8 只在证明"没有活着的读"之后才删它，
+    而且**没法用 keep 规则堵**（成员语法不接受裸 `<clinit>;`）。
+    """
+    return ("$r8$lambda$" in sig or "$$ExternalSyntheticLambda" in sig
+            or "$$Lambda$" in sig or sig.endswith(".<clinit>()V"))
+
+
 def diff_surface(dbg, rel):
     """debug 有、release 没有的类与成员 —— 就是 R8 削掉的东西。"""
     missing_classes = sorted(c for c in set(dbg) - set(rel) if not is_synthetic_remnant(c))
@@ -123,6 +138,17 @@ def apk_signature_info(path):
     with open(path, "rb") as f:
         blob = f.read()
     return v1, (magic in blob)
+
+
+def apk_dex_blob(path):
+    """把所有 classes*.dex 拼成一个 bytes —— 用来查「某个字面量还在不在包里」。
+
+    查字面量而不是查方法名，是因为 **R8 会把代码搬到别的类**（内联 / 横向合并），
+    方法所在的类不是稳定信息，字符串常量才是。
+    """
+    with zipfile.ZipFile(path) as z:
+        return b"".join(z.read(n) for n in sorted(z.namelist())
+                        if n.startswith("classes") and n.endswith(".dex"))
 
 
 def size_breakdown(path, top=8):
@@ -154,6 +180,7 @@ def main():
 
     CATVOD = ("Lcom/github/catvod/",)
     THIRD_PARTY = ("Lokhttp3/", "Lokio/", "Lcom/google/gson/")
+    QUICKJS = ("Lcom/whl/quickjs/",)
 
     rel, rel_all, rel_n = surface(rel_apk, CATVOD + THIRD_PARTY)
     dbg, dbg_all, dbg_n = surface(dbg_apk, CATVOD + THIRD_PARTY)
@@ -214,6 +241,28 @@ def main():
         ok = cls in rel_t and sig in rel_t[cls][0]
         print(f"   {'✅' if ok else '❌'} {cls[1:-1]}.{sig}")
 
+    # ── 1d. QuickJS 绑定的 ABI 差分 ────────────────────────────────────────
+    # 与 1 / 1b 是同一类风险，只是"外部调用方"换成了**原生层**：
+    # `libquickjs-android-wrapper.so` 在 JNI 侧按名字回调 Java
+    # （`callFunctionBack` / `removeCallFunction` / `freeValue` / `hold` …），
+    # 这些引用既不在本 App 的调用图里、也不在 strings 里，R8 全都看不到。
+    # keep 规则在 proguard-rules.pro §8 的最后两行。
+    rel_q, _, _ = surface(rel_apk, QUICKJS)
+    dbg_q, _, _ = surface(dbg_apk, QUICKJS)
+    q_missing, q_raw = diff_surface(dbg_q, rel_q)
+    q_lost = [m for m in q_raw if not is_synthetic_member(m)]
+    q_synth = [m for m in q_raw if is_synthetic_member(m)]
+    print("\n── 1d. QuickJS 绑定 ABI 差分（原生层按名字回调）──")
+    if not q_missing and not q_lost:
+        print(f"   差集为空 ✅ —— {len(rel_q)} 个绑定类，原生层要调的成员一个没少")
+    else:
+        for c in q_missing:
+            print("   ❌ 整个类没了:", c)
+        for m in q_lost[:40]:
+            print("   ❌ 成员没了:", m)
+    for m in q_synth:
+        print(f"   ℹ️  已知例外（lambda 去糖 / 空 <clinit>，无外部调用方）: {m}")
+
     # ── 2. 点名确认「只给 jar 用」的成员 ──────────────────────────────────
     print("\n── 2. 点名确认「只给 jar 用」的成员 ──")
     spider = "Lcom/github/catvod/crawler/Spider;"
@@ -230,12 +279,112 @@ def main():
     else:
         print("   ❌ Spider 类在 release 里不存在")
 
+    # ── 2b. Room 生成类：**反射加载**的本项目类 ─────────────────────────────
+    # `Room.databaseBuilder(...).build()` 走 `Class.forName("<包名>.<Database>_Impl")`，
+    # 名字在字符串里、构造器靠反射调 —— 与 §1 同一类风险，区别是这次被削的是**本项目
+    # 自己的类**，§1 的 `com.github.catvod.**` keep 规则覆盖不到它，靠 proguard-rules.pro
+    # §7 的 `-keep class * extends androidx.room.RoomDatabase { *; }` 兜住。
+    #
+    # ⚠️ 断言只能落在「类在不在 + 入口成员在不在 + 行为还在不在」，**不能**断言
+    #    `LibraryDao_Impl` 的每个方法名都还在。理由（2026-09-16 实测推翻了我第一版写法）：
+    #    R8 会把 `_Impl` 的方法**内联进调用方、或把整个类横向合并进别的类** —— 于是
+    #    `class_defs()` 里 `LibraryDao_Impl` 只剩 `<init>`，看着像"方法全被削了"，
+    #    实际上 SQL 与查询体都还在包里，只是换了宿主类。误报会把人骗去改 keep 规则。
+    #    判据改成「SQL 字面量仍在」——它不关心代码被搬到哪里。
+    print("\n── 2b. Room 反射锚点（本项目自己的类）──")
+    room_probes = [
+        ("Lcom/cycling/beevideo/data/local/BeeDatabase_Impl;",
+         ["<init>", "library", "createOpenDelegate"]),
+        ("Lcom/cycling/beevideo/data/local/LibraryDao_Impl;", ["<init>"]),
+    ]
+    room_bad = []
+    ROOM_PREFIX = ("Lcom/cycling/beevideo/data/local/",)
+    rel_room, rel_room_all, _ = surface(rel_apk, ROOM_PREFIX)
+    for cls, want in room_probes:
+        if cls not in rel_room_all:
+            print(f"   ❌ 类被整个删掉: {cls[1:-1]}")
+            room_bad.append(cls)
+            continue
+        methods, fields = rel_room.get(cls, (set(), set()))
+        missing = [w for w in want if not any(m.startswith(w + "(") for m in methods)]
+        print(f"   {'✅' if not missing else '❌'} {cls[1:-1]}  "
+              f"{len(methods)} 方法 / {len(fields)} 字段"
+              + (f"  缺: {missing}" if missing else ""))
+        room_bad += [(cls, m) for m in missing]
+
+    # 行为锚点：这 5 条 SQL 与库名必须还在包里（不论被 R8 搬到哪个类）
+    sql_anchors = [
+        "SELECT * FROM history WHERE vodId = ?",
+        "SELECT * FROM keep ORDER BY createdAt DESC",
+        "SELECT EXISTS(SELECT 1 FROM keep WHERE vodId = ?)",
+        "DELETE FROM keep WHERE vodId = ?",
+        "beevideo.db",
+    ]
+    rel_blob = apk_dex_blob(rel_apk)
+    for s in sql_anchors:
+        ok = s.encode() in rel_blob
+        print(f"   {'✅' if ok else '❌'} SQL/库名仍在: {s}")
+        if not ok:
+            room_bad.append(("SQL", s))
+
+    # ── 2c. JS 引擎反射锚点：本项目自己的 `@JSMethod` ───────────────────────
+    # 与 §2b 的 Room 是同一类：**被削的是本项目自己的类**，§1 的
+    # `com.github.catvod.**` keep 规则覆盖不到，靠 proguard-rules.pro §8。
+    #
+    # 机制（见 `js/Global.kt`）：`Global` 的构造器扫 `getClass().getMethods()`，
+    # 把标了 `@JSMethod` 的**按方法名**挂到 JS 全局对象上；`Local` 更狠 ——
+    # 捆绑库对它做 `clazz.newInstance()` 之后按**实例方法**反射调用。
+    # 所以两件事都必须验：① 类在不在；② 方法名（含 `<init>`）在不在。
+    # R8 在字节码里看不到任何一条直接引用，删起来毫无阻力 ——
+    # 症状是"编译通过、启动正常，一跑 .js 源就 `<name> is not a function`"，
+    # 报错全在 JS 侧、指不到"宿主把方法删了"。
+    print("\n── 2c. JS 引擎反射锚点（本项目自己的 @JSMethod 类）──")
+    JS_PREFIX = ("Lcom/cycling/beevideo/data/source/vod/js/",)
+    rel_js, _, _ = surface(rel_apk, JS_PREFIX)
+    dbg_js, _, _ = surface(dbg_apk, JS_PREFIX)
+    js_missing, js_raw = diff_surface(dbg_js, rel_js)
+    js_lost = [m for m in js_raw if not is_synthetic_member(m)]
+    js_synth = [m for m in js_raw if is_synthetic_member(m)]
+    js_bad = list(js_missing)
+    js_anchors = [
+        ("Lcom/cycling/beevideo/data/source/vod/js/Global;",
+         ["<init>", "s2t", "t2s", "getPort", "getProxy", "js2Proxy",
+          "setTimeout", "clearTimeout", "_http", "req", "joinUrl",
+          "md5X", "aesX", "desX", "rsaX", "destroy"]),
+        # ⚠️ `Local` 的 `<init>` 是**必需项**：捆绑库的
+        # `setProperty(String, Class)` 会先 `clazz.newInstance()`。
+        # 写成 Kotlin 的 `object`（私有构造器）就会在这一步抛 NPE。
+        ("Lcom/cycling/beevideo/data/source/vod/js/Local;",
+         ["<init>", "get", "set", "delete"]),
+    ]
+    for cls, want in js_anchors:
+        if cls not in rel_js:
+            print(f"   ❌ 类被整个删掉: {cls[1:-1]}")
+            js_bad.append(cls)
+            continue
+        methods, fields = rel_js[cls]
+        missing = [w for w in want if not any(m.startswith(w + "(") for m in methods)]
+        print(f"   {'✅' if not missing else '❌'} {cls[1:-1]}  "
+              f"{len(methods)} 方法 / {len(fields)} 字段"
+              + (f"  缺: {missing}" if missing else ""))
+        js_bad += [f"{cls[1:-1]}.{m}" for m in missing]
+    if js_missing or js_lost:
+        for c in js_missing:
+            print("   ❌ 整个类没了:", c)
+        for m in js_lost[:40]:
+            print("   ❌ 成员没了:", m)
+        js_bad += js_lost
+    else:
+        print(f"   接口面差分：空 ✅（{len(rel_js)} 个 js 类）")
+    for m in js_synth:
+        print(f"   ℹ️  已知例外（lambda 去糖 / 空 <clinit>，无外部调用方）: {m}")
+
     # ── 3. 混淆是否真的关掉 ───────────────────────────────────────────────
     print("\n── 3. 混淆状态（-dontobfuscate 是否生效）──")
     probes = [
         "Lcom/cycling/beevideo/ui/home/HomeScreenKt;",
         "Lcom/cycling/beevideo/data/source/vod/catvod/DexJarLoader;",
-        "Lcom/cycling/beevideo/data/source/vod/catvod/JarSiteClient;",
+        "Lcom/cycling/beevideo/data/source/vod/catvod/SpiderSiteClient;",
         "Lcom/google/gson/Gson;",
     ]
     for p in probes:
@@ -259,7 +408,8 @@ def main():
           f"＝ 压掉 {100 * (1 - os.path.getsize(rel_apk) / dbg_size):.1f}%")
 
     print("\n" + "=" * 74)
-    bad = bool(missing_classes or lost_members or tp_missing or tp_lost) or not (v1 or v2)
+    bad = (bool(missing_classes or lost_members or tp_missing or tp_lost or room_bad)
+           or bool(q_missing or q_lost) or bool(js_bad)) or not (v1 or v2)
     print("结论：", "❌ 有问题，见上" if bad else "✅ 全项通过")
     return 1 if bad else 0
 

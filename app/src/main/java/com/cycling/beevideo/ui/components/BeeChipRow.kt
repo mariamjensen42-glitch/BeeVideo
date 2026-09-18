@@ -14,7 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.cycling.beevideo.data.demo.DemoContent
+import com.cycling.beevideo.ui.preview.PreviewVods
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
 
@@ -76,7 +76,7 @@ fun <T> BeeChipRow(
 private fun BeeChipRowPreview() {
     BeeVideoTheme(darkTheme = true) {
         BeeChipRow(
-            items = DemoContent.categories,
+            items = PreviewVods.categories,
             selectedIndex = 1,
             onSelect = {},
             contentPadding = PaddingValues(horizontal = BeeDimens.gapMedium),
