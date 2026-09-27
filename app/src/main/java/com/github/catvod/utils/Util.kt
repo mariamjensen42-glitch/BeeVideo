@@ -8,39 +8,21 @@ import java.net.NetworkInterface
 import java.util.Base64
 
 /**
- * 杂项工具 —— **本项目自带的兼容层**，对齐参考宿主的
- * `catvod/src/main/java/com/github/catvod/utils/Util.java`。
+ * 杂项工具 —— **本项目自带的兼容层**，对齐参考宿主的 `Util.java`。
  *
- * ─── 谁在用 ──────────────────────────────────────────────────────────
- * JS 爬虫引擎里有两处：
- *   - `JsSpider.getStream`：把 JS 返回的 base64 内容解成字节流交回播放器；
- *   - `Connect.success`：`buffer == 2` 时把响应体编成 base64 再塞进 JS 对象。
- * 所以 [decode] / [base64] 的**宽容度**是有实际后果的：解不出来就是播放失败。
+ * 谁在用：`JsSpider.getStream`（把 JS 返回的 base64 解成字节流）与 `Connect.success`
+ * （`buffer == 2` 时把响应体编成 base64），所以 [decode] / [base64] 的**宽容度**
+ * 是有实际后果的：解不出来就是播放失败。
  *
- * ─── ⚠️ 与参考实现的关键差异：Base64 不用 `android.util.Base64` ────────
- * 参考实现用的是 `android.util.Base64` + `Base64.DEFAULT | Base64.NO_WRAP`。
- * 这里换成 `java.util.Base64`，理由**不是"更现代"，是单测会静默错**：
+ * ⚠️ 与参考实现的关键差异：Base64 不用 `android.util.Base64`。理由不是"更现代"，
+ * 是**单测会静默错** —— 项目开了 `isReturnDefaultValues = true`，纯 JVM 单测里
+ * `android.util.Base64.decode(...)` 不抛异常、返回 null，断言会拿到 NPE 而不是
+ * "解码结果不对"，排查方向直接偏掉。
  *
- * `app/build.gradle.kts` 开了 `unitTests.isReturnDefaultValues = true`，
- * 于是纯 JVM 单测里 `android.util.Base64.decode(...)` **不抛异常，返回 null**
- * —— 断言会拿到一个 NullPointerException，而不是"解码结果不对"，
- * 排查方向直接偏掉。
+ * 行为差异是**更宽容**的方向：先剥空白（Android 默认忽略）、按有无 `-`/`_` 自动选
+ * 字母表（Android 的 DEFAULT 两者都收）、缺 `=` 补齐。
  *
- * 行为差异（有意为之，且是**更宽容**的方向）：
- *   - Android 的解码器默认忽略空白；`java.util.Base64` 的基础解码器**不忽略**。
- *     所以这里先剥掉空白再解 —— 与 Android 的行为对齐。
- *   - Android 的解码器在 `DEFAULT` 下**同时接受**标准字母表与 URL-safe 字母表；
- *     `java.util.Base64` 要分开选。这里按"有没有 `-` / `_`"自动选，
- *     结果与 Android 一致。
- *   - 缺 `=` 补齐：JS 侧手写的 base64 常省略填充，Android 能解，严格的
- *     `java.util.Base64` 会抛。补齐后才等价。
- *
- * 编码侧只是**不带换行**：参考实现的 flags 里有 `NO_WRAP`，本来就不换行。
- *
- * ─── 没有搬过来的成员 ────────────────────────────────────────────────
- * `OKHTTP` 常量（`"okhttp/" + OkHttp.VERSION`）没搬：那个字段是 OkHttp **5.x** 的，
- * 本项目钉的是 4.12.0，取不到。它在本项目里也无人使用（JS 引擎不用它）。
- * `CHROME` 保留了 —— 纯字面量，且是被真实爬虫问得最多的一个 UA。
+ * 没搬 `OKHTTP` 常量：那是 OkHttp 5.x 的字段，本项目钉 4.12.0，取不到，也无人使用。
  */
 object Util {
 
@@ -60,10 +42,9 @@ object Util {
         Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 
     /**
-     * Base64 解码。[decode] 的宽松策略见类注释。
+     * Base64 解码，宽松策略见类注释。
      *
-     * @throws IllegalArgumentException 输入不是合法 base64 时。**与参考实现不同**
-     *   （它返回 null 或抛 `IllegalArgumentException`，取决于具体 flags），
+     * @throws IllegalArgumentException 输入不是合法 base64 时。**与参考实现不同**，
      *   调用方（`JsSpider.getStream`）自己决定要不要接住。
      */
     @JvmStatic
@@ -100,7 +81,6 @@ object Util {
         false
     }
 
-    /** 去掉末尾 1 个字符。 */
     @JvmStatic
     fun substring(text: String?): String = substring(text, 1)
 
@@ -114,12 +94,9 @@ object Util {
     /**
      * 本机局域网 IPv4。
      *
-     * ⚠️ 与 `com.github.catvod.Proxy` 里的 `lanIp()` **功能重叠**，这是有意的：
-     * 那个是私有的、只服务于代理地址拼接；这个是兼容层的一部分，
-     * 真实爬虫会调 `Util.getIp()`（`invokestatic`）。两者都保留。
-     *
-     * 取不到时返回空串（参考实现如此），**不是** `"127.0.0.1"` ——
-     * 调用方要靠空串判断"没有局域网地址"。
+     * ⚠️ 与 `com.github.catvod.Proxy` 里的 `lanIp()` 功能重叠，这是有意的：那个是私有的、
+     * 只服务于代理地址拼接；这个是兼容层的一部分，真实爬虫会调 `Util.getIp()`。
+     * 取不到时返回空串（**不是** `127.0.0.1`），调用方靠空串判断"没有局域网地址"。
      */
     @JvmStatic
     fun getIp(): String = try {
@@ -133,12 +110,9 @@ object Util {
     }
 
     /**
-     * 从 WifiManager 拿地址。
-     *
-     * ⚠️ Android 12+ 上没有定位权限时 `getConnectionInfo()` 的 IP 恒为 0
-     * （系统返回脱敏的 WifiInfo），所以这一条**在真机上基本拿不到值** ——
-     * 它只是参考实现链条里的第三顺位，前两条（网卡扫描）才是有效的。
-     * 照搬是为了行为对齐，不是因为它在现代 Android 上还能工作。
+     * ⚠️ Android 12+ 上没定位权限时 `getConnectionInfo()` 的 IP 恒为 0（系统返回脱敏的
+     * WifiInfo），所以这一条在真机上基本拿不到值 —— 它只是参考实现链条里的第三顺位，
+     * 前两条（网卡扫描）才是有效的。照搬是为了行为对齐。
      */
     private fun getWifiAddress(): String {
         val context = Init.context() ?: return ""

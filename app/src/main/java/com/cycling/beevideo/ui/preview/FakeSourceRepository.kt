@@ -19,7 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * 首页看的是"顶栏副标题有没有来源名"，设置页看的是"来源列表和说明文字"。
  * 所以重复的是那五个空方法体，状态是各自的意图。
  *
- * 用 [singleSourceReady] / [threeSourcesReady] 取用，别在这里加别的默认值。
+ * 用 [singleSourceReady] / [threeSourcesReady] / [manySourcesReady] 取用，
+ * 别在这里加别的默认值 —— 三个各对应一件要看的事：顶栏副标题、来源列表、站点换行。
  */
 class FakeSourceRepository(status: SourceStatus) : ContentSourceRepository {
 
@@ -61,6 +62,22 @@ class FakeSourceRepository(status: SourceStatus) : ContentSourceRepository {
                 ),
                 activeSourceId = "mock_json",
                 message = "共 3 个来源",
+            )
+        )
+
+        /**
+         * 设置页预览 · 站点多的时候：24 个长短不齐的名字，网格的换行形态才看得出来。
+         *
+         * ⚠️ 说明文字与真实仓储逐字一致（`VodContentRepository` 就是这么拼的），别顺手改成"站点"。
+         */
+        fun manySourcesReady(): FakeSourceRepository = FakeSourceRepository(
+            SourceStatus(
+                phase = SourcePhase.READY,
+                configUrl = "http://127.0.0.1:18080/config.json",
+                sources = PreviewSites.many,
+                // 选中项刻意不取首尾：看首尾圆角有没有串到中间项上
+                activeSourceId = PreviewSites.many[7].id,
+                message = "共 ${PreviewSites.many.size} 个来源",
             )
         )
     }

@@ -8,65 +8,34 @@ import com.github.catvod.crawler.SpiderApi
 import dalvik.system.DexClassLoader
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * [SiteClientFactory] 的接口面。
- *
- * 与 `SourceStore` / `ConfigCache` 同一个理由：装载与清空逻辑要能在纯 JVM
- * 单测里跑，而这个工厂的构造要 `Context`（它还要起本地代理、建 QuickJS 上下文）。
- * 仓储真正用到的只有两件事 —— 取一个站点客户端、把缓存的客户端全部作废。
- */
+/** [SiteClientFactory] 的接口面：仓储只要「取一个客户端」和「全部作废」。 */
 interface SiteClients {
 
     suspend fun client(siteKey: String, config: CatVodConfig): SiteClient
 
-    /** 换配置 / 改了设置时调用。 */
     fun clear()
 }
 
-/**
- * 按站点类型造出对应的 [SiteClient]，并按站点 key 缓存。
- *
- * 缓存是必须的：jar 源的 `init` 可能有网络请求、ClassLoader 建立一次也要几十毫秒，
- * 每次翻页都重建一遍的话列表会卡得没法用。
- */
+/** 按站点类型造 [SiteClient] 并按 key 缓存。缓存是必须的：jar 的 `init` 可能有网络请求。 */
 class SiteClientFactory(context: Context) : SiteClients {
 
     private val appContext = context.applicationContext
     private val cache = ConcurrentHashMap<String, SiteClient>()
 
-    /*
-     * 本地代理服务的派发口 —— 服务本身**懒启动**：只有真的要用到 jar 站点时才起。
-     *
-     * 拿到端口之后不能停：jar 已经把 `http://127.0.0.1:<port>/proxy?…` 这样的地址
-     * 交给过播放器，播放器随时会回来取。参考宿主也是常驻的。
-     *
-     * ⚠️ `spiderOf` 必须写成**具名实参**。派发器还有第二个参数
-     * `staticProxies: () -> List<Method>`，写成尾随 lambda 的话那个 lambda 会
-     * 绑到 `staticProxies` 上 —— 报错是 "Return type mismatch: expected
-     * List<Method>, actual Spider?"，看着像类型系统在闹脾气，其实是位置错位。
-     */
+    // 代理服务懒启动；起来之后不能停（jar 已经把自指地址交给过播放器）
+    //
+    // ⚠️ spiderOf / jsProxy 都必须写成**具名实参**：派发器还有一个
+    // `staticProxies: () -> List<Method>` 参数，写成尾随 lambda 会绑到它上面
     private val proxyHandler = CatVodProxyDispatcher(
         spiderOf = { key -> (cache[key] as? SpiderSiteClient)?.spider },
-        /*
-         * `do=js` 且不带 siteKey 的请求（`Global.getProxy()` 拼出的裸地址）
-         * 交给"最近用过的那个 JS 源"。
-         *
-         * ⚠️ 必须写成**具名实参**：派发器第三个参数是 `staticProxies`，
-         * 把 lambda 写成尾随的话会绑到它上面（同下面 `spiderOf` 的坑）。
-         *
-         * 拿到的 `spider` 与 jar 源是同一个类型（`JsSpider` 继承
-         * `com.github.catvod.crawler.Spider`），所以这里不需要认识 JS 包的任何类型
-         * —— 这也正是 JS 引擎能"零成本"接进现有派发链的原因。
-         */
         jsProxy = { params -> proxyOfRecentJs(params) },
     )
 
     /**
-     * 把请求交给"最近用过的 JS 源"。
+     * `do=js` 且不带 siteKey 的裸地址（`Global.getProxy()` 拼的）交给"最近用过的 JS 源"。
      *
-     * 找不到就返回 `null`（= 没人接手 → `LocalProxyServer` 回 502）。
-     * **不要**退回"随便挑一个 JS 源"：JS 源的 `proxy` 是靠各自的站点上下文
-     * 取流的，挑错了会拿到**另一个站点的内容**，而播放器完全看不出来。
+     * ⚠️ 找不到就返回 `null`（502），**不要**退回随便挑一个：JS 源的 proxy 靠各自的站点
+     * 上下文取流，挑错了会拿到另一个站点的内容，而播放器看不出来。
      */
     @Suppress("UNCHECKED_CAST")
     private fun proxyOfRecentJs(params: Map<String, String>): Array<Any?>? {
@@ -75,22 +44,14 @@ class SiteClientFactory(context: Context) : SiteClients {
         return client.spider.proxy(params) as Array<Any?>?
     }
 
-    /** JS 引擎（原生库初始化 + "最近用过的源"）。一个工厂一份，与 [cache] 同生命周期。 */
     private val jsLoader = JsLoader()
 
-    /** 传给爬虫的能力对象。本地代理起来了就是真实现，没起来才退回空实现。 */
     private val spiderApi: SpiderApi = ServerSpiderApi()
 
     @Volatile
     private var proxyUp = false
 
-    /**
-     * 把造好的 spider 装成可用的站点。
-     *
-     * `initSpider` 这支 lambda 是**宿主上下文与可测性之间的那条缝**：
-     * `spider.init` 要 `Context`，而 [SpiderHost] 故意不认识 `Context`，
-     * 于是「`siteKey` 必须在 `init` 之前」这条顺序契约能在纯 JVM 单测里钉住。
-     */
+    // initSpider 是宿主上下文与可测性之间的缝：SpiderHost 故意不认识 Context
     private val spiderHost = SpiderHost(
         spiderApi = spiderApi,
         proxyReady = { proxyUp },
@@ -114,17 +75,10 @@ class SiteClientFactory(context: Context) : SiteClients {
         }
 
     /**
-     * `type=3/4` —— 需要"运行引擎"的站点。
+     * `type=3/4` —— 需要运行引擎的站点。判据与顺序照搬参照实现（FongMi `BaseLoader.getSpider`）：
+     * `.py` → Python 引擎、`.js` → JS 引擎、`csp_` → DexClassLoader、其它 → 抛错。
      *
-     * `api` 字段决定用哪个引擎，**判据与顺序都照搬参照实现**
-     * （FongMi `BaseLoader.getSpider`）：
-     * ```
-     * .py  → Python 引擎        .js  → JS 引擎
-     * csp_ → DexClassLoader     其它 → 空实现
-     * ```
-     * 顺序有讲究：`.py` 排在 `.js` 前面。两种后缀同时出现（`xxx.js.py`）
-     * 在实践中不存在，但顺序与参照实现不一致的话，将来加 Python 支持时
-     * 会先在分派这里产生一个说不清的行为差异。
+     * ⚠️ 没有"静默空实现"这一档：api 认不出来就报错，否则只是把问题推迟到运行期。
      */
     private suspend fun createDynamicClient(site: SiteConfig, config: CatVodConfig): SiteClient {
         val api = site.api
@@ -142,18 +96,11 @@ class SiteClientFactory(context: Context) : SiteClients {
     }
 
     private suspend fun createJarClient(site: SiteConfig, config: CatVodConfig): SiteClient {
-        /*
-         * 代理服务必须在 jar **有机会拿到端口之前**起来。
-         *
-         * jar 会把 `http://127.0.0.1:<port>/proxy?…` 这种自指地址直接交给播放器，
-         * 端口在那一刻就被定死了。晚一步起来的话，jar 读到的是初始值 -1，
-         * 播放页报 `MalformedURLException: invalid port: -1` —— 而那时候
-         * 再启动服务已经没用，地址已经在播放器手里了。
-         */
+        // ⚠️ 必须在 jar 拿到端口之前起来：晚一步 jar 读到 -1，播放页报 invalid port: -1，
+        // 而那时地址已经在播放器手里了，再启动也没用
         if (!proxyUp) proxyUp = LocalProxyServer.ensureStarted(proxyHandler)
 
-        // 站点自己没带 jar 时用顶层 spider 指的那个 —— 这是绝大多数配置的形态：
-        // 一个总 jar 里装了几十个 csp_* 类，sites 只写 api: "csp_Xxx"
+        // 站点没带 jar 就用顶层 spider 那个：绝大多数配置是一个总 jar 装几十个 csp_* 类
         val spec = site.jar.ifEmpty { config.spider }
         if (spec.isEmpty()) {
             throw CatVodException("站点「${site.name}」需要 jar，但配置里既没有站点 jar 也没有顶层 spider")
@@ -161,14 +108,8 @@ class SiteClientFactory(context: Context) : SiteClients {
         val (jarUrl, md5) = parseJarSpec(spec)
         val jarFile = DexJarLoader.ensureJar(appContext, jarUrl, md5)
 
-        /*
-         * 类名兜底校验。
-         *
-         * `api` 写错（写成 URL、写成站点名）时，拼出来的"类名"里会带 `/` 或 `:`，
-         * 而 `DexClassLoader` 只会抛 `ClassNotFoundException` ——
-         * 报错是一长串「找不到类 com.github.catvod.spider.http://…」，
-         * 完全看不出问题出在 `api` 字段上。这里先拦一道，把话说清楚。
-         */
+        // api 写错（写成 URL / 站点名）时拼出的"类名"会带 / 或 :，DexClassLoader 只会抛
+        // 一长串 ClassNotFoundException，看不出问题在 api 字段上
         val className = "com.github.catvod.spider.${site.spiderClassName}"
         if (className.any { it == '/' || it == ':' }) {
             throw CatVodException(
@@ -183,60 +124,23 @@ class SiteClientFactory(context: Context) : SiteClients {
             className = className,
         )
 
-        // 标记"最近用过的 jar"：多数 `/proxy` 请求不带 siteKey，宿主只能挨个试，
-        // 而这个几乎总是刚在用的那个（参考实现 JarLoader.recent 的用途）。
+        // 多数 /proxy 请求不带 siteKey，宿主只能挨个试，而几乎总是刚在用的那个
         DexJarLoader.markRecent(jarFile)
 
-        /*
-         * ⚠️ `siteKey` 必须在 `init` **之前**赋值。
-         *
-         * 原版 `JarLoader.getSpider` 的顺序就是：
-         * ```java
-         * Spider spider = (Spider) loader.loadClass(…).newInstance();
-         * spider.siteKey = key;
-         * spider.init(App.get(), ext);
-         * ```
-         * 顺序有意义：一个 jar 里的同一个类被配置成十几个站点是常态
-         * （`csp_AppYs` 配了"南府追剧""HG影视""瑞丰资源"…），
-         * 爬虫靠 `siteKey` 区分自己这次该用哪套 ext / header。
-         * 放到 init 之后就晚了 —— init 里已经把站点相关的状态定下来了。
-         */
-        /*
-         * 装配（siteKey → init → initApi）交给 [SpiderHost]：那三步的顺序是**承重的**，
-         * 而这条链以前在 jar 与 JS 两边各写了一遍。理由见它的说明。
-         */
+        // ⚠️ siteKey 必须在 init 之前赋值：同一个类被配成十几个站点是常态，
+        // init 里已经用到了站点相关状态，放到后面就晚了（顺序钉在 SpiderHost 里）
         return spiderHost.host(site, spider, config.flags, logTag = "CatVodJar")
     }
 
     /**
-     * `.js` 爬虫（drpy 系）的站点 —— 走 [com.cycling.beevideo.data.source.vod.js.JsSpider]。
-     *
-     * 与 [createJarClient] 的流程**几乎一样**，差别只在"造 spider"那一步：
-     * jar 是 `DexClassLoader` + 反射 new，JS 是建 QuickJS 上下文 + 求值源码。
-     * 之后的 `siteKey` → `init` → `initApi` 三步一字不差，理由也完全相同。
-     *
-     * 返回的 [SpiderSiteClient] 对 jar 与 JS 是**同一个类** —— 它服务的是任何
-     * `com.github.catvod.crawler.Spider`，JS 引擎能"零成本"接进来靠的就是这一点。
+     * `.js` 爬虫（drpy 系），走 `JsSpider`。与 [createJarClient] 只差"造 spider"那一步，
+     * 之后 siteKey → init → initApi 三步一字不差。
      */
     private suspend fun createJsClient(site: SiteConfig, config: CatVodConfig): SiteClient {
-        // 与 jar 同一条理由：JS 的 `getProxy()` 同样会把端口写进交给播放器的地址，
-        // 晚一步起来就是 `127.0.0.1:-1`
         if (!proxyUp) proxyUp = LocalProxyServer.ensureStarted(proxyHandler)
 
-        /*
-         * 可选：把配置里的 jar 交给 JS 引擎。
-         *
-         * 它唯一的用途是 `com.github.catvod.js.Function` —— 一个**额外**的宿主
-         * 钩子，由主 spider.jar 提供（见 `JsSpider.createFun`）。绝大多数 drpy 源
-         * 用不到它，所以：
-         *   - 配置里没有 jar → 传 null，完全正常；
-         *   - 有 jar 但下载 / 加载失败 → **吞掉**，只记一行日志。
-         * 为了一个可选钩子让整个站点建不起来，是明显更差的失败模式。
-         *
-         * ⚠️ 代价说清楚：配置里有顶层 `spider` 时，**每个 JS 站点都会触发一次
-         * jar 下载**（有本地缓存则只查一次文件）。这是参照实现的行为 ——
-         * 它同样无条件 `BaseLoader.get().dex(jar)`。
-         */
+        // 可选：把配置里的 jar 交给 JS 引擎，唯一用途是 com.github.catvod.js.Function 这个
+        // 额外钩子。没有 jar 是正常路径，下载/加载失败则吞掉 —— 为可选钩子让站点建不起来更差。
         val dex = runCatching { optionalJarLoader(site, config) }
             .onFailure { Log.w("CatVodJs", "站点「${site.name}」的可选 jar 钩子不可用：$it") }
             .getOrNull()
@@ -245,17 +149,13 @@ class SiteClientFactory(context: Context) : SiteClients {
 
         val client = spiderHost.host(site, spider, config.flags, logTag = "CatVodJs")
 
-        // 标记"最近用过的 JS 源"：不带 siteKey 的裸 `?do=js` 代理请求只能靠它派发
+        // 不带 siteKey 的裸 ?do=js 代理请求只能靠这个标记派发
         jsLoader.markRecent(site.key)
 
         return client
     }
 
-    /**
-     * 取配置里那个 jar 的 ClassLoader，供 JS 引擎的可选钩子用。
-     *
-     * 返回 `null` 是**正常路径**（配置里根本没有 jar），不是错误。
-     */
+    /** 取配置里那个 jar 的 ClassLoader。返回 `null` 是正常路径（配置里没有 jar）。 */
     private suspend fun optionalJarLoader(site: SiteConfig, config: CatVodConfig): DexClassLoader? {
         val spec = site.jar.ifEmpty { config.spider }
         if (spec.isEmpty()) return null
@@ -264,44 +164,16 @@ class SiteClientFactory(context: Context) : SiteClients {
         return DexJarLoader.loader(appContext, jarFile)
     }
 
-    /*
-     * ─── ⚠️ 关于 `ext`：**不下载、原样交给爬虫**（2026-09-16 更正）─────────
-     *
-     * 这里原来有一个 `fetchExtIfUrl`：`ext` 以 `http` 开头时宿主先 GET 下来、
-     * 把**内容**当 ext。它引的是参考宿主的 `Site.fetchExt()`，但**引错了范围**——
-     * 参考实现里 `fetchExt()` **只在一处被调用**：
-     * ```java
-     * // SiteApi.homeContent —— 注意分支
-     * if (isSpider(site)) { … }                    // type==3，**不** fetchExt
-     * else if (site.getType() == 4) { call(site.fetchExt(), params); }   // 只有 type==4
-     * ```
-     * `isSpider(site)` 就是 `type == 3`。也就是说 **type=3（jar / .js / .py 爬虫）
-     * 拿到的 `ext` 永远是配置里那一串原文**，只有 type=4 才下载。
-     * 本项目的参考分析文档 §2.3 记的也是这个（"3 → 交给 `Spider.init(Context, String)`"）。
-     *
-     * 这个差别**有实际后果**，不是洁癖。实测用户那份配置里 type=3 有 9 个站点的
-     * `ext` 以 `http` 开头，分两类，**下载内容两类都错**：
-     * ```
-     * csp_ZxzjGuard   ext=https://www.zxzjhd.com/          ← 站点**根地址**
-     * (drpy2)         ext=…/jrk.js                         ← 规则脚本的**地址**
-     * ```
-     * 前者爬虫要的是那个 URL（它自己拼 XPath、自己带 header 去请求），
-     * 给它一坨首页 HTML 等于把 ext 弄坏；后者 drpy 拿它去 `import`/请求，
-     * 给一段源码文本同样接不住。
-     *
-     * 相对路径（`./js/xxx.js`）不在这里管 —— 那由
-     * [CatVodConfigDecoder] 在**解析之前**统一改成绝对地址。
-     * 两者是配套的：先把相对路径变成绝对的，再原样交给爬虫。
-     */
+    // ⚠️ `ext` **不下载、原样交给爬虫**（2026-09-16 更正）。参考宿主的 `Site.fetchExt()`
+    // 只在 type==4 时调用；type=3（jar / .js / .py）拿到的永远是配置里的原文。
+    // 实测 type=3 有站点的 ext 是站点根地址或规则脚本地址，下载内容两类都错。
+    // 相对路径由 CatVodConfigDecoder 在解析之前统一改成绝对地址。
 
-    /** 换配置 / 改了设置时调用。 */
     override fun clear() {
-        // 走 seam 上的 close()，不再向下转型成具体实现 —— 见 SiteClient.close 的说明
         cache.values.forEach { it.close() }
         cache.clear()
         DexJarLoader.clear()
-        // JS 侧还有两块进程级状态：模块源码缓存、以及"最近用过的源"标记。
-        // 不清的话，换配置后裸 `?do=js` 的请求会去找**上一份配置**里的站点。
+        // 进程级状态也要清，否则换配置后裸 ?do=js 会去找上一份配置里的站点
         jsLoader.clear()
     }
 }

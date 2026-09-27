@@ -34,6 +34,24 @@ interface LibraryRepository {
      */
     fun saveProgress(progress: PlayProgress, force: Boolean = false)
 
+    /**
+     * 全部观看进度，按最后观看时间倒序。
+     *
+     * 一部剧一条（主键就是影片 id），所以这个列表**本身就是按影片聚合**的结果，
+     * 不需要界面再去分组。历史页与首页的「继续观看」都订阅它。
+     */
+    val progressList: Flow<List<PlayProgress>>
+
+    /** 只删这一条记录，与收藏无关 —— 两个页面各自的删除按钮只该动自己的表。 */
+    suspend fun deleteProgress(vodId: String)
+
+    /**
+     * 清空全部观看进度。
+     *
+     * **不可撤销**，所以界面必须先二次确认 —— 这条约束由界面承担，仓储不弹任何东西。
+     */
+    suspend fun clearProgress()
+
     // ------------------------------------------------------------------ 收藏
 
     /** 按收藏时间倒序。用 [Flow] 是因为详情页取消收藏后，收藏页那张卡必须立刻消失。 */

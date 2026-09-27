@@ -38,9 +38,14 @@ class PrefsPlaybackSettings(context: Context) : PlaybackSettings {
             ?: PlaybackSettings.DEFAULT_QUOTA_BYTES
         set(value) = prefs.edit().putLong(KEY_CACHE_QUOTA, value).apply()
 
+    override var autoPlayNext: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_NEXT, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_NEXT, value).apply()
+
     private companion object {
         const val PREFS_NAME = "beevideo.playback"
         const val KEY_CACHE_ENABLED = "cache_enabled"
         const val KEY_CACHE_QUOTA = "cache_quota_bytes"
+        const val KEY_AUTO_NEXT = "auto_play_next"
     }
 }

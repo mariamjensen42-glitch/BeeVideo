@@ -17,36 +17,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * [PlaybackSession] 的 Media3 / ExoPlayer 实现。
+ * [PlaybackSession] 的 Media3 / ExoPlayer 实现：建播放器、按请求头建媒体源、
+ * 显式指定 MIME、seek + prepare、注册 Listener、读位置与时长、以及"先取位置再释放"的顺序。
  *
- * ─── 它搬走了什么 ─────────────────────────────────────────────────────
- * 以前这些东西全在 `PlayerScreen` 的 composable 里：建播放器、按请求头建媒体源、
- * 显式指定 MIME、`seekTo` + `prepare`、注册 `Player.Listener`、读位置与时长、
- * 以及"先取位置再释放"的顺序。它们都是**内核知识**，与界面无关 ——
- * 混在 composable 里的代价是这一层不可测，也没有第二个内核的落脚点。
- *
- * 缓冲策略、磁盘缓存、UA 补齐仍在 [PlayerFactory] 里（那是"播放知识"而不是
- * "内核驱动"），本类只负责把它装配到一个会话上。
- *
- * ─── 为什么不用协程 ───────────────────────────────────────────────────
- * ExoPlayer 必须在**有 Looper 的线程**上创建与调用（实践上就是主线程）。
- * [open] / [close] 是普通函数，跟着调用方的线程走 —— 也就是主线程，
- * 与之前的行为一致。这里不引入自己的作用域，就没有"关闭时还要取消谁"的问题。
+ * 不用协程：ExoPlayer 必须在有 Looper 的线程上创建与调用（实践上就是主线程），
+ * [open] / [close] 跟着调用方线程走。
  */
 class Media3PlaybackSession(
     context: Context,
-    /** `null` = 这次不走磁盘缓存（见 `MediaCacheProvider.get`）。 */
+    /** `null` = 这次不走磁盘缓存。 */
     private val cache: Cache?,
 ) : PlaybackSession {
 
     /**
      * 便捷装配：按**配额**自己取那个进程内唯一的缓存实例。
-     *
-     * 有它是因为"取缓存实例"是 `player/` 的知识（要 Media3 的 `SimpleCache`），
-     * 而调用方（播放页）只该提供**策略**：开不开、配额多少。
-     * 没有它的话播放页就得 `import player.MediaCacheProvider` 才能把会话建起来。
-     *
-     * `quotaBytes <= 0` 视为不用缓存（见 [MediaCacheProvider.get]）。
+     * 有它播放页才不用 `import MediaCacheProvider` 也能把会话建起来。
      */
     constructor(context: Context, quotaBytes: Long) : this(
         context = context,
@@ -57,24 +42,13 @@ class Media3PlaybackSession(
         playWhenReady = true
     }
 
-    /**
-     * 内核实例。**只给画面绑定用** —— 起播 / 状态 / 进度一律走本类的接口。
-     *
-     * 之所以要暴露它：Media3 的 `PlayerView` 必须拿到一个 `Player` 才能渲染，
-     * 而"哪个内核配哪种视图"本来就是内核的事，藏不掉（见 `PlaybackSurface` 的说明）。
-     */
+    /** 内核实例，**只给画面绑定用** —— 起播 / 状态 / 进度一律走本类的接口。 */
     val player: Player get() = exoPlayer
 
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
-    /*
-     * 关闭之后还要读得到的那份快照。
-     *
-     * `release()` 会把内核内部位置清零，而"退出播放页时落进度"发生在 close 之后 ——
-     * 所以最后读到的那两个值必须自己留着（接口上写明了这条保证）。
-     * `@Volatile` 是因为宿主可能在别的线程上读（它读的是接口，不保证同线程）。
-     */
+    // release() 会把内核内部位置清零，而落进度发生在 close 之后，所以最后读到的值要自己留着
     @Volatile
     private var lastPositionMs = 0L
 
@@ -84,7 +58,7 @@ class Media3PlaybackSession(
     @Volatile
     private var closed = false
 
-    /** 当前请求头对应的媒体源工厂。请求头是**构建期**参数，变了就得换一套。 */
+    /** 请求头是**构建期**参数，变了就得换一套媒体源工厂。 */
     private var sourceFactory: MediaSource.Factory? = null
     private var headers: Map<String, String> = emptyMap()
 
@@ -95,14 +69,14 @@ class Media3PlaybackSession(
                 Player.STATE_BUFFERING -> PlaybackState.Buffering
                 Player.STATE_READY ->
                     if (exoPlayer.isPlaying) PlaybackState.Playing else PlaybackState.Paused
-                // STATE_IDLE / STATE_ENDED：没有可播的东西了
+                // ⚠️ 不能并进 Idle：并了之后"播完了"和"还没起播"同态，自动下一集无从下手
+                Player.STATE_ENDED -> PlaybackState.Ended
                 else -> PlaybackState.Idle
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            // 只在 READY 时改状态：起播前后 ExoPlayer 会来回翻这个标志，
-            // 跟着它走会让状态在 Buffering 与 Playing 之间抖动
+            // 只在 READY 时改状态：起播前后 ExoPlayer 会来回翻这个标志，跟着走状态会抖动
             if (exoPlayer.playbackState != Player.STATE_READY) return
             _state.value = if (isPlaying) PlaybackState.Playing else PlaybackState.Paused
         }
@@ -110,7 +84,7 @@ class Media3PlaybackSession(
         override fun onPlayerError(error: PlaybackException) {
             _state.value = PlaybackState.Failed(
                 reason = PlaybackFailure.Kernel,
-                // 播放器原始报错含一堆解码器细节，只取最后一段说明性文本
+                // 原始报错含一堆解码器细节，只取最后一段说明性文本
                 detail = error.cause?.message ?: error.errorCodeName,
             )
         }
@@ -121,10 +95,7 @@ class Media3PlaybackSession(
     }
 
     override fun open(target: PlayTarget, resumeAtMs: Long) {
-        /*
-         * 两类地址**不交给内核**。硬塞进去的结果分别是黑屏和一条看不懂的解码错误，
-         * 而用户会以为是播放器坏了 —— 所以在这里就转成说得清的状态。
-         */
+        // 两类地址不交给内核：硬塞进去的结果是黑屏和一条看不懂的解码错误，转成说得清的状态
         if (target.url.isEmpty()) {
             _state.value = PlaybackState.Failed(PlaybackFailure.NoAddress, detail = null)
             return
@@ -138,11 +109,7 @@ class Media3PlaybackSession(
         }
 
         val mime = mimeTypeOfPlayUrl(target.url)
-        /*
-         * 这一行是排查播放问题的**第一个抓手**（`adb logcat -s BeePlayer`）：
-         * 缓存开没开、已用空间、判出来的 MIME、最终地址。它以前在 `PlayerScreen` 里，
-         * 跟着内核知识一起搬了过来 —— 换内核时它该在新内核的实现里，而不是界面上。
-         */
+        // 排查播放问题的第一个抓手（adb logcat -s BeePlayer）
         Log.i(
             TAG,
             "起播 缓存=${if (cache == null) "关" else "开"}" +
@@ -154,17 +121,13 @@ class Media3PlaybackSession(
             factoryFor(target.headers).createMediaSource(
                 MediaItem.Builder()
                     .setUri(target.url)
-                    /*
-                     * MIME **必须显式给**：Media3 自己猜只看 URI 最后一段路径，
-                     * jar 那种 `http://127.0.0.1:9978/proxy?do=m3u8&url=…` 会被猜成
-                     * OTHER → 走渐进式 → 报 `UnrecognizedInputFormatException`，
-                     * 看起来像源站的流坏了。判据与理由见 [mimeTypeOfPlayUrl]。
-                     */
+                    // ⚠️ MIME 必须显式给：Media3 只看 URI 最后一段路径猜，jar 那种
+                    // /proxy?do=m3u8&… 会被猜成 OTHER → 报 UnrecognizedInputFormatException
                     .setMimeType(mime)
                     .build(),
             ),
         )
-        // 先跳再 prepare：顺序反了会先从头起播、再跳一下，用户能看见那次跳变
+        // 先跳再 prepare：顺序反了会先从头起播再跳一下，用户能看见那次跳变
         exoPlayer.seekTo(resumeAtMs)
         exoPlayer.prepare()
 
@@ -199,11 +162,27 @@ class Media3PlaybackSession(
         exoPlayer.release()
     }
 
-    /**
-     * 按请求头取媒体源工厂，能复用就复用。
-     *
-     * 同一条线路内换集时请求头不变，所以工厂不会被重建；换线路才换一套。
-     */
+    override fun togglePlayPause() {
+        // 按 playWhenReady 而不是 isPlaying：缓冲时只有前者等于"用户想不想播"
+        if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play()
+    }
+
+    override fun seekTo(positionMs: Long) {
+        // ⚠️ 先写快照再 seek：currentPosition 在 seek 落地前仍读得到旧值，界面下一帧
+        // 会拿它画进度条、被拖回去一下。拖到 0 时还要绕开 positionMs 里 live > 0 的守卫
+        lastPositionMs = positionMs
+        exoPlayer.seekTo(positionMs)
+    }
+
+    override fun setSpeed(speed: Float) {
+        exoPlayer.setPlaybackSpeed(speed)
+    }
+
+    // 倍速落在 player 级的 playbackParameters 上，setMediaSource 换集不会清掉，
+    // 所以"这一集调了 1.5x，下一集还是 1.5x"，界面必须从内核读回来
+    override fun speed(): Float = exoPlayer.playbackParameters.speed
+
+    /** 按请求头取媒体源工厂，同一条线路内换集时请求头不变，所以不会重建。 */
     private fun factoryFor(requestHeaders: Map<String, String>): MediaSource.Factory {
         sourceFactory?.let { existing ->
             if (headers == requestHeaders) return existing
@@ -213,7 +192,6 @@ class Media3PlaybackSession(
     }
 
     private companion object {
-        /** 与 `MediaCache` 同一个 tag：播放相关的问题都看 `adb logcat -s BeePlayer`。 */
         const val TAG = "BeePlayer"
     }
 }

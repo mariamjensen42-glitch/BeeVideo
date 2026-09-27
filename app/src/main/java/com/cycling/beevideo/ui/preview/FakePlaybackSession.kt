@@ -54,4 +54,33 @@ class FakePlaybackSession : PlaybackSession {
     fun emit(state: PlaybackState) {
         _state.value = state
     }
+
+    // ────────────────────────────────────────────────────── 播放期控制
+
+    var toggleCount = 0
+        private set
+
+    /** 每次 [seekTo] 的记录，按调用顺序。用来断言"拖拽中不 seek、松手才 seek"。 */
+    val seeks = mutableListOf<Long>()
+
+    private var currentSpeed = 1f
+
+    override fun togglePlayPause() {
+        toggleCount++
+        // 与真实现同口径地翻转：用例才能断言"按一下确实换了边"
+        _state.value =
+            if (_state.value == PlaybackState.Playing) PlaybackState.Paused
+            else PlaybackState.Playing
+    }
+
+    override fun seekTo(positionMs: Long) {
+        seeks += positionMs
+        currentPositionMs = positionMs
+    }
+
+    override fun setSpeed(speed: Float) {
+        currentSpeed = speed
+    }
+
+    override fun speed(): Float = currentSpeed
 }

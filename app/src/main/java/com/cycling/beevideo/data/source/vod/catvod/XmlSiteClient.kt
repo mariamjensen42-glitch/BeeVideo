@@ -54,6 +54,13 @@ class XmlSiteClient(site: SiteConfig) : HttpSiteClient(site) {
         return toVod(el, categoryId = el.text("tid"))
     }
 
+    /** 页数写在 `<list page="1" pagecount="100" recordcount="2000">` 上，不是子元素。 */
+    override fun parseTotalPages(body: String): Int? {
+        val doc = parseXml(body) ?: return null
+        val list = doc.getElementsByTagName("list").item(0) as? Element ?: return null
+        return list.getAttribute("pagecount").trim().toIntOrNull()?.takeIf { it > 0 }
+    }
+
     // ------------------------------------------------------------------
 
     private fun parseCategories(doc: Document): List<Category> {

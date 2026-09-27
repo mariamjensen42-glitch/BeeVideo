@@ -50,6 +50,13 @@ class RoomLibraryRepository(
         writer.launch { dao.putHistory(progress.toEntity()) }
     }
 
+    override val progressList: Flow<List<PlayProgress>> =
+        dao.histories().map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun deleteProgress(vodId: String) = dao.deleteHistory(vodId)
+
+    override suspend fun clearProgress() = dao.clearHistory()
+
     // ---------------------------------------------------------------- 收藏
 
     override val keeps: Flow<List<KeepItem>> =
@@ -69,22 +76,32 @@ class RoomLibraryRepository(
 
 private fun HistoryEntity.toDomain() = PlayProgress(
     vodId = vodId,
+    lineIndex = lineIndex,
     lineName = lineName,
     episodeIndex = episodeIndex,
     episodeName = episodeName,
     positionMs = positionMs,
     durationMs = durationMs,
     updatedAt = updatedAt,
+    name = name,
+    pic = pic,
+    score = score,
+    remarks = remarks,
 )
 
 private fun PlayProgress.toEntity() = HistoryEntity(
     vodId = vodId,
+    lineIndex = lineIndex,
     lineName = lineName,
     episodeIndex = episodeIndex,
     episodeName = episodeName,
     positionMs = positionMs,
     durationMs = durationMs,
     updatedAt = updatedAt,
+    name = name,
+    pic = pic,
+    score = score,
+    remarks = remarks,
 )
 
 private fun KeepEntity.toDomain() = KeepItem(

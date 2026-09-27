@@ -26,11 +26,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -38,22 +34,19 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
-import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.ui.components.BeeBackButton
 import com.cycling.beevideo.ui.components.BeeCenteredNotice
 import com.cycling.beevideo.ui.components.LoadState
-import com.cycling.beevideo.ui.preview.FakeContentRepository
 import com.cycling.beevideo.ui.components.PosterCard
 import com.cycling.beevideo.ui.components.SkeletonPosterGrid
 import com.cycling.beevideo.ui.components.beeTopAppBarColors
-import com.cycling.beevideo.ui.components.loadState
 import com.cycling.beevideo.ui.components.skeletonSemantics
+import com.cycling.beevideo.ui.preview.PreviewVods
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
 
@@ -61,50 +54,23 @@ import com.cycling.beevideo.ui.theme.BeeVideoTheme
 private const val SEARCH_SKELETON_ROWS = 2
 
 /**
- * 搜索页。
+ * 搜索页。纯渲染 —— 数据全从 [uiState] 来，动作全走 [onIntent]。
  *
- * ─── 为什么是"提交式"而不是"边打边搜" ──────────────────────────────────
- * 这是**跨源**搜索：一次提交会同时打向当前来源里所有可搜索的站点（上限见
- * [com.cycling.beevideo.data.repository.VodContentRepository]）。跟随输入的
- * 即时搜索会在每个字符上发起一整轮跨源请求 —— 打"庆余年"三个字就是三轮，
- * 而前两轮的结果注定被丢掉。
- *
- * 所以状态拆成两个：`input`（输入框里的字）与 `submitted`（真正搜过的词）。
- * 只有 `submitted` 是 [loadState] 的键，敲键盘不会触发任何请求。
- *
- * ─── 三态 ────────────────────────────────────────────────────────────
- * 没搜过（`submitted` 为空 → Ready(null)）/ 搜索中 / 有结果或无结果。
- * 没搜过与搜了没结果是**两句不同的话**：前者要告诉用户怎么开始，
- * 后者要说清搜的是哪个词 —— 否则用户会怀疑是不是自己没按下去。
+ * "提交式而不是边打边搜"这条取舍住在 [SearchState]；这里只管把 `input` 与 `submitted`
+ * 画成该有的样子，以及聚焦与收键盘这两个**局部 UI 关注点**。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    content: ContentRepository,
-    onVodClick: (Vod) -> Unit,
-    onBack: () -> Unit,
+    uiState: SearchUiState,
+    onIntent: (SearchIntent) -> Unit,
 ) {
-    var input by rememberSaveable { mutableStateOf("") }
-    var submitted by rememberSaveable { mutableStateOf("") }
-
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 
-    /*
-     * 键是 `submitted`（已提交的词），不是 `input`。
-     * `submitted` 为空串时返回 null —— 用 null 表达"还没搜"，而不是空列表：
-     * 空列表会被界面读成"搜了，没有结果"。
-     */
-    val state = loadState(submitted) {
-        if (submitted.isBlank()) null else content.search(submitted)
-    }
-
     val submit: () -> Unit = {
-        val q = input.trim()
-        if (q.isNotEmpty()) {
-            submitted = q
-            focusManager.clearFocus()
-        }
+        onIntent(SearchIntent.OnSubmit)
+        focusManager.clearFocus()
     }
 
     // 进来就聚焦：这是搜索页，用户点它就是为了打字。
@@ -119,7 +85,7 @@ fun SearchScreen(
         topBar = {
             TopAppBar(
                 title = { Text(text = stringResource(R.string.search_title)) },
-                navigationIcon = { BeeBackButton(onBack) },
+                navigationIcon = { BeeBackButton { onIntent(SearchIntent.OnBack) } },
                 colors = beeTopAppBarColors(),
             )
         },
@@ -130,8 +96,8 @@ fun SearchScreen(
                 .padding(innerPadding),
         ) {
             TextField(
-                value = input,
-                onValueChange = { input = it },
+                value = uiState.input,
+                onValueChange = { onIntent(SearchIntent.OnInputChange(it)) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(
@@ -154,8 +120,8 @@ fun SearchScreen(
                     )
                 },
                 trailingIcon = {
-                    if (input.isNotEmpty()) {
-                        IconButton(onClick = { input = "" }) {
+                    if (uiState.input.isNotEmpty()) {
+                        IconButton(onClick = { onIntent(SearchIntent.OnClearInput) }) {
                             Icon(
                                 imageVector = Icons.Outlined.Close,
                                 contentDescription = stringResource(R.string.search_clear),
@@ -171,7 +137,7 @@ fun SearchScreen(
             // 网格会和键盘抢空间（网格在 Column 里量到的是"剩余高度"，
             // 用 weight 才能把它钉在剩余空间上，否则要么溢出要么塌成 0）。
             Box(modifier = Modifier.weight(1f)) {
-                when (state) {
+                when (val result = uiState.result) {
                     is LoadState.Loading -> SkeletonPosterGrid(
                         /*
                          * ⚠️ 横向留白**必须自己给**。
@@ -195,20 +161,24 @@ fun SearchScreen(
                         rows = SEARCH_SKELETON_ROWS,
                     )
 
-                    is LoadState.Failed -> BeeCenteredNotice(fillHeight = true, 
-                        text = stringResource(R.string.search_failed, state.message),
+                    is LoadState.Failed -> BeeCenteredNotice(
+                        fillHeight = true,
+                        text = stringResource(R.string.search_failed, result.message),
                     )
 
                     is LoadState.Ready -> {
-                        val outcome = state.value
+                        val outcome = result.value
                         if (outcome == null) {
                             // 还没搜过
-                            BeeCenteredNotice(fillHeight = true, text = stringResource(R.string.search_hint))
+                            BeeCenteredNotice(
+                                fillHeight = true,
+                                text = stringResource(R.string.search_hint),
+                            )
                         } else {
                             SearchResults(
                                 outcome = outcome,
-                                keyword = submitted,
-                                onVodClick = onVodClick,
+                                keyword = uiState.submitted,
+                                onVodClick = { onIntent(SearchIntent.OnOpenVod(it)) },
                             )
                         }
                     }
@@ -237,9 +207,15 @@ private fun SearchResults(
              * 用户会去改关键词，而改多少次都不会有结果。
              */
             if (outcome.searchableSources == 0) {
-                BeeCenteredNotice(fillHeight = true, text = stringResource(R.string.search_no_searchable))
+                BeeCenteredNotice(
+                    fillHeight = true,
+                    text = stringResource(R.string.search_no_searchable),
+                )
             } else {
-                BeeCenteredNotice(fillHeight = true, text = stringResource(R.string.search_no_result, keyword))
+                BeeCenteredNotice(
+                    fillHeight = true,
+                    text = stringResource(R.string.search_no_result, keyword),
+                )
             }
             if (outcome.truncated) {
                 CoverageLine(outcome)
@@ -259,7 +235,7 @@ private fun SearchResults(
         horizontalArrangement = Arrangement.spacedBy(BeeDimens.gapSmall),
         verticalArrangement = Arrangement.spacedBy(BeeDimens.gapMedium),
     ) {
-        item(key = "summary", span = { GridItemSpan(maxLineSpan) }) {
+        item(key = "summary", span = { GridItemSpan(maxLineSpan) }, contentType = "row") {
             Column {
                 Text(
                     text = stringResource(R.string.search_result_count, outcome.vods.size),
@@ -269,7 +245,7 @@ private fun SearchResults(
                 if (outcome.truncated) CoverageLine(outcome)
             }
         }
-        items(outcome.vods, key = { it.id }) { vod ->
+        items(outcome.vods, key = { it.id }, contentType = { "poster" }) { vod ->
             PosterCard(vod = vod, onClick = { onVodClick(vod) })
         }
     }
@@ -298,6 +274,13 @@ private fun CoverageLine(outcome: SearchOutcome) {
 
 // ------------------------------------------------------------------ 预览
 
+/** 演示结果：故意截断，好让「已搜索 10 / 86 个源」那一行在预览里出现。 */
+private val truncatedOutcome = SearchOutcome(
+    vods = PreviewVods.vods,
+    searchedSources = 10,
+    searchableSources = 86,
+)
+
 @Preview(
     name = "搜索 · 空态",
     group = "页面",
@@ -309,7 +292,7 @@ private fun CoverageLine(outcome: SearchOutcome) {
 @Composable
 private fun SearchScreenPreview() {
     BeeVideoTheme(darkTheme = true) {
-        SearchScreen(content = FakeContentRepository(), onVodClick = {}, onBack = {})
+        SearchScreen(uiState = SearchUiState(), onIntent = {})
     }
 }
 
@@ -324,7 +307,7 @@ private fun SearchScreenPreview() {
 @Composable
 private fun SearchScreenLightPreview() {
     BeeVideoTheme(darkTheme = false) {
-        SearchScreen(content = FakeContentRepository(), onVodClick = {}, onBack = {})
+        SearchScreen(uiState = SearchUiState(), onIntent = {})
     }
 }
 
@@ -337,16 +320,33 @@ private fun SearchScreenLightPreview() {
     heightDp = 891,
 )
 @Composable
-private fun SearchResultsPreview() {
+private fun SearchScreenResultsPreview() {
     BeeVideoTheme(darkTheme = true) {
-        SearchResults(
-            outcome = SearchOutcome(
-                vods = com.cycling.beevideo.ui.preview.PreviewVods.vods,
-                searchedSources = 10,
-                searchableSources = 86,
+        SearchScreen(
+            uiState = SearchUiState(
+                input = "示例",
+                submitted = "示例",
+                result = LoadState.Ready(truncatedOutcome),
             ),
-            keyword = "示例",
-            onVodClick = {},
+            onIntent = {},
+        )
+    }
+}
+
+@Preview(
+    name = "搜索 · 搜索中",
+    group = "页面",
+    showBackground = true,
+    backgroundColor = 0xFF0B0A08,
+    widthDp = 411,
+    heightDp = 891,
+)
+@Composable
+private fun SearchScreenLoadingPreview() {
+    BeeVideoTheme(darkTheme = true) {
+        SearchScreen(
+            uiState = SearchUiState(input = "示例", submitted = "示例"),
+            onIntent = {},
         )
     }
 }

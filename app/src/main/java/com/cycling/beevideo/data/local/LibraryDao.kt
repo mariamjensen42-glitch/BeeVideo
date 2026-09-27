@@ -26,6 +26,23 @@ abstract class LibraryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun putHistory(row: HistoryEntity)
 
+    /**
+     * 全部进度，按最后观看时间倒序。
+     *
+     * **倒序是查询的一部分而不是界面的事**：历史页与首页模块都要按这个顺序，各排一次
+     * 就会出现"首页顺序对了、历史页忘了排"这类只有对照两屏才看得出来的差异。
+     *
+     * 一部剧一行（主键是 vodId），所以不需要 GROUP BY。
+     */
+    @Query("SELECT * FROM history ORDER BY updatedAt DESC")
+    abstract fun histories(): Flow<List<HistoryEntity>>
+
+    @Query("DELETE FROM history WHERE vodId = :vodId")
+    abstract suspend fun deleteHistory(vodId: String)
+
+    @Query("DELETE FROM history")
+    abstract suspend fun clearHistory()
+
     // ---------------------------------------------------------------- 收藏
 
     @Query("SELECT * FROM keep ORDER BY createdAt DESC")

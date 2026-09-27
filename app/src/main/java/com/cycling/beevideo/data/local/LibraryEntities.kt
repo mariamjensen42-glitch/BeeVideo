@@ -10,11 +10,15 @@ import androidx.room.PrimaryKey
  * 改名就会连带变成一次数据库迁移 —— 领域模型该跟着语义走，不该跟着存储走。
  *
  * 一部剧一行，只记「上次看到哪」。逐集进度不在 MVP 范围。
+ *
+ * 后五项（线路号与四个快照字段）是 v2 新增的：历史页要能在**来源已不可用**时照样列出来，
+ * 而那时回源问片名必然失败。
  */
 @Entity(tableName = "history")
 data class HistoryEntity(
     /** 形如 `站点key:源内id`，同时是主键 */
     @PrimaryKey val vodId: String,
+    val lineIndex: Int,
     val lineName: String,
     val episodeIndex: Int,
     val episodeName: String,
@@ -22,6 +26,10 @@ data class HistoryEntity(
     /** 0 表示来源没给时长 */
     val durationMs: Long,
     val updatedAt: Long,
+    val name: String,
+    val pic: String,
+    val score: String,
+    val remarks: String,
 )
 
 /** 收藏表。快照字段在这里是数据本身，不是冗余（理由见 KeepItem）。 */

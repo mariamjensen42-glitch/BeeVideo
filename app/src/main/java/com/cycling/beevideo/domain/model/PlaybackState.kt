@@ -12,7 +12,7 @@ package com.cycling.beevideo.domain.model
  */
 sealed interface PlaybackState {
 
-    /** 没载入任何媒体，或者已经播完/释放。 */
+    /** 没载入任何媒体，或者已经释放。 */
     data object Idle : PlaybackState
 
     /** 已交给内核，正在等首帧或重新缓冲。 */
@@ -23,6 +23,15 @@ sealed interface PlaybackState {
 
     /** 已就绪但没在播（用户暂停，或内核停在 READY 还没起播）。 */
     data object Paused : PlaybackState
+
+    /**
+     * 这一集播完了。
+     *
+     * ⚠️ **必须与 [Idle] 分开**：两者都表示"现在没有画面在动"，但只有 Ended 能推出
+     * "该接下一集了"。以前内核的 `STATE_ENDED` 被并进 [Idle]，于是"自动下一集"这件事
+     * 在状态层面根本无从判断 —— 界面分不清"播完了"和"还没起播"。
+     */
+    data object Ended : PlaybackState
 
     /** 起不来。 */
     data class Failed(

@@ -1,6 +1,8 @@
 package com.cycling.beevideo
 
 import android.app.Application
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import com.cycling.beevideo.data.local.BeeDatabase
 import com.cycling.beevideo.data.repository.RoomLibraryRepository
 import com.cycling.beevideo.data.repository.VodContentRepository
@@ -35,7 +37,7 @@ import com.github.catvod.utils.Notify
  *
  * 就五个对象，不值得引入 DI 框架 —— 几个 `lateinit` 字段更好看懂，也更好定位问题。
  */
-class BeeApplication : Application() {
+class BeeApplication : Application(), ImageLoaderFactory {
 
     lateinit var content: VodContentRepository
         private set
@@ -81,4 +83,19 @@ class BeeApplication : Application() {
             MediaCacheProvider.warmUp(this, playback.cacheQuotaBytes)
         }
     }
+
+    /**
+     * 封面图的加载器（Coil 全局单例）。
+     *
+     * ⚠️ 关掉「尊重响应头的缓存指令」。海报图床里相当一部分发 `Cache-Control: no-cache`
+     * 或者压根不发，Coil 默认会因此**跳过磁盘缓存** —— 症状是来回滚动时同一张封面每次
+     * 都重新下载（实测缓存目录能到 1500+ 张，说明多数源能缓存，但漏网的那些最费流量）。
+     * 封面是静态图，时效性没有意义，一律按"看到过就不再走网络"处理。
+     *
+     * 内存缓存与磁盘缓存的默认值（可用内存的 25% / 250MB）都合适，不覆盖；写死数字
+     * 只会在换机型时变成新的调参对象。
+     */
+    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+        .respectCacheHeaders(false)
+        .build()
 }

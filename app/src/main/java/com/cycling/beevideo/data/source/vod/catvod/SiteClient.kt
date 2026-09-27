@@ -2,6 +2,7 @@ package com.cycling.beevideo.data.source.vod.catvod
 
 import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 
 /**
  * 一个「可查询的内容站点」。
@@ -17,8 +18,8 @@ interface SiteClient {
     /** 站点首页：分类 + 推荐内容（对应 CatVod 的 `homeContent`） */
     suspend fun homeContent(): HomeContent
 
-    /** 按分类取列表，page 从 1 开始 */
-    suspend fun categoryContent(tid: String, page: Int): List<Vod>
+    /** 按分类取列表，page 从 1 开始。返回的一页里带「还有多少页」—— 翻页判据只有站点知道 */
+    suspend fun categoryContent(tid: String, page: Int): VodPage
 
     /** 取详情。`sourceId` 是**源内的** id（不带站点前缀） */
     suspend fun detailContent(sourceId: String): Vod?

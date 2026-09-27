@@ -21,6 +21,8 @@ class JsonSiteClient(site: SiteConfig) : HttpSiteClient(site) {
     override fun parseVods(body: String, categoryId: String): List<Vod> =
         CatVodResponse.parseVods(body, site.key, categoryId)
 
+    override fun parseTotalPages(body: String): Int? = CatVodResponse.parseTotalPages(body)
+
     override fun parseDetail(body: String): Vod? =
         CatVodResponse.parseDetail(body, site.key)
 }

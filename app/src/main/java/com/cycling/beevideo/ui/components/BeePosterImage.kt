@@ -14,8 +14,8 @@ import coil.request.ImageRequest
  *
  * ─── 为什么共享 ────────────────────────────────────────────────────────
  * 同样七行 `ImageRequest.Builder(context).data(pic).crossfade(true).build()`
- * 在卡片、刊头、详情页各写了一遍。真正的问题不是重复本身，而是**这三处必须
- * 一起改**：换缓存策略、加占位、加失败重试，任何一项都要求改三遍，
+ * 在卡片、详情页各写了一遍。真正的问题不是重复本身，而是**这两处必须
+ * 一起改**：换缓存策略、加占位、加失败重试，任何一项都要求改两遍，
  * 而漏掉一处不会报错 —— 只会让某一个位置的封面比别处慢一拍或闪一下。
  *
  * ─── `pic` 为空时什么都不画 ────────────────────────────────────────────
@@ -36,8 +36,9 @@ fun BeePosterImage(
     if (pic.isEmpty()) return
     val context = LocalContext.current
     AsyncImage(
-        // remember(pic)：换图时才重建请求；每次重组新建会让 Coil 每帧重下一次
-        model = remember(pic) {
+        // remember(pic, context)：换图或换 context（Activity 重建）时才重建请求；
+        // 每次重组新建会让 Coil 每帧重下一次
+        model = remember(pic, context) {
             ImageRequest.Builder(context)
                 .data(pic)
                 .crossfade(true)

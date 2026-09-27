@@ -16,8 +16,7 @@
 
     <!-- 首页 -->
     <string name="home_brand">BeeVideo</string>
-    <string name="home_featured_label">精选</string>
-    <string name="home_featured_index">%1$02d/%2$02d</string>
+    <string name="home_resume_title">继续观看</string>
     <!-- 元信息（评分/年代/状态）由 MetaLine.kt 拼，不用位置占位符 —— 缺字段时
          格式串会留下没有数值的「分 ·」。 -->
     <string name="vod_score_suffix">%1$s 分</string>
@@ -27,6 +26,9 @@
     <string name="home_loading">正在读取…</string>
     <string name="home_load_failed">读取失败：%1$s</string>
     <string name="home_category_empty">这个分类下暂时没有内容</string>
+    <!-- 网格末尾的追加页状态。到底了要说出来：不说的话用户分不清"只有这些"和"没加载出来" -->
+    <string name="home_all_loaded">已显示全部</string>
+    <string name="home_more_failed">加载更多失败：%1$s</string>
 
     <!-- 未配置 / 装载失败（整页提示） -->
     <string name="home_no_source_title">还没有配置内容源</string>
@@ -58,16 +60,58 @@
     <string name="cd_keep_add">收藏</string>
     <string name="cd_keep_remove">取消收藏</string>
 
+    <!-- 观看历史。顺序与文案的分工见 HistoryText.kt：判据在代码里，词在这里 -->
+    <string name="history_title">观看历史</string>
+    <string name="history_loading">正在读取观看记录…</string>
+    <string name="history_empty_title">还没有观看记录</string>
+    <string name="history_empty_body">播放过的内容会在这里留下进度，点一下就能从上次的位置接着看。记录只存在本机，不会上传。</string>
+    <string name="history_clear">清空历史</string>
+    <string name="history_clear_title">清空全部观看记录？</string>
+    <string name="history_clear_body">所有影片的续播位置会被删除，此操作不可撤销。收藏不受影响。</string>
+    <string name="history_clear_confirm">清空</string>
+    <string name="history_view_all">查看全部</string>
+    <string name="history_menu_continue">继续播放</string>
+    <string name="history_menu_detail">查看详情</string>
+    <string name="history_menu_delete">从历史中删除</string>
+    <!-- 集数：来源没给剧集名时退回按序号写 -->
+    <string name="history_episode">第 %1$d 集</string>
+    <string name="history_progress_percent">%1$d%%</string>
+    <string name="history_finished">已看完</string>
+    <string name="history_today">今天 %1$s</string>
+    <string name="history_yesterday">昨天 %1$s</string>
+    <string name="history_days_ago">%1$d 天前</string>
+    <string name="history_date_this_year">%1$d月%2$d日</string>
+    <string name="history_date">%1$d年%2$d月%3$d日</string>
+
     <!-- 设置 -->
     <string name="settings_title">设置</string>
     <string name="settings_section_source">内容源</string>
-    <string name="settings_source_body">BeeVideo 不内置、不推荐、不分发任何内容源。填入你自己持有的配置地址（站点配置或单站点接口地址均可）。</string>
+    <string name="settings_source_body">内容源均由第三方提供，BeeVideo 只做播放，不生产、不运营，也不保证它们可用。从下面选一个预置的，或填入你自己持有的地址（站点配置、单站点接口均可）。</string>
+    <!-- 预置配置：2026-09-27 高城拍板破除「不内置内容源」红线，取舍见 ADR-0008 -->
+    <string name="settings_config_preset">预置配置</string>
+    <string name="settings_config_fty">推荐</string>
+    <string name="settings_config_fty_note">47 个站点 · 综合最稳，真机跑通过</string>
+    <string name="settings_config_0825">大合集</string>
+    <string name="settings_config_0825_note">135 个站点 · App 类源最多</string>
+    <string name="settings_config_box">站点最多</string>
+    <string name="settings_config_box_note">234 个站点 · 涵盖面最广</string>
+    <string name="settings_config_9918">网盘</string>
+    <string name="settings_config_9918_note">56 个站点 · 以网盘、磁力为主</string>
+    <string name="settings_config_gao">备用</string>
+    <string name="settings_config_gao_note">86 个站点 · 它自带的 JS 源已失效</string>
     <string name="settings_source_label">配置地址</string>
     <string name="settings_source_placeholder">https://…</string>
     <string name="settings_source_load">装载</string>
     <string name="settings_source_clear">清除</string>
     <string name="settings_source_loading">正在读取配置…</string>
     <string name="settings_source_active">当前来源</string>
+    <string name="settings_source_change">更换</string>
+    <string name="settings_source_picker_title">选择来源</string>
+    <string name="settings_source_search">搜索站点名</string>
+    <string name="settings_source_count">共 %1$d 个</string>
+    <string name="settings_source_no_match">没有匹配的来源</string>
+    <string name="settings_section_playback">播放</string>
+    <string name="settings_auto_next">自动播放下一集</string>
     <string name="settings_section_cache">播放缓存</string>
     <string name="settings_cache_body">看过的内容会留一份在本机，重复观看和拖回去重看都不再走网络。超出上限时自动清理最久没看的。缓存只存在本机，不会上传。</string>
     <string name="settings_cache_switch">启用缓存</string>
@@ -95,6 +139,8 @@
     <string name="detail_load_failed">读取详情失败：%1$s</string>
     <string name="detail_section_lines">播放线路</string>
     <string name="detail_section_episodes">选集 · 共 %1$d 集</string>
+    <!-- %1$s 是剧集名，由来源给出（如「第 03 集」） -->
+    <string name="detail_last_watched">上次看到 %1$s</string>
     <string name="detail_director">导演 %1$s</string>
     <string name="detail_actors">主演 %1$s</string>
 
@@ -104,6 +150,7 @@
     <string name="player_line">线路：%1$s</string>
     <string name="player_prev">上一集</string>
     <string name="player_next">下一集</string>
+    <string name="player_section_lines">线路</string>
     <string name="player_section_episodes">选集</string>
     <string name="player_url_placeholder">—</string>
     <string name="player_resolving">正在解析播放地址…</string>
@@ -114,6 +161,13 @@
 
     <!-- 播放信息对话框 -->
     <string name="player_action_info">播放信息</string>
+    <string name="player_action_play">播放</string>
+    <string name="player_action_pause">暂停</string>
+    <string name="player_action_fullscreen">全屏</string>
+    <string name="player_action_exit_fullscreen">退出全屏</string>
+    <!-- 手势 HUD 的标签。亮度改的是本 App 窗口、音量改的是媒体流，都不落库 -->
+    <string name="player_gesture_brightness">亮度</string>
+    <string name="player_gesture_volume">音量</string>
     <string name="player_info_title">播放信息</string>
     <string name="player_info_line">线路</string>
     <string name="player_info_episode">剧集</string>
@@ -121,5 +175,6 @@
     <string name="player_info_state">状态</string>
     <string name="player_state_buffering">缓冲中</string>
     <string name="player_state_ready">就绪</string>
+    <string name="player_state_ended">本集播完</string>
     <string name="player_state_error">出错</string>
 </resources>

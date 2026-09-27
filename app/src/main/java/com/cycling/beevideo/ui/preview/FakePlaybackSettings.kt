@@ -11,4 +11,5 @@ import com.cycling.beevideo.domain.repository.PlaybackSettings
 class FakePlaybackSettings(
     override var cacheEnabled: Boolean = true,
     override var cacheQuotaBytes: Long = PlaybackSettings.DEFAULT_QUOTA_BYTES,
+    override var autoPlayNext: Boolean = true,
 ) : PlaybackSettings

@@ -4,6 +4,7 @@ import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.PlayTarget
 import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 import com.cycling.beevideo.domain.repository.ContentRepository
 
 /**
@@ -23,12 +24,16 @@ class FakeContentRepository : ContentRepository {
 
     override suspend fun categories(): List<Category> = PreviewVods.categories
 
-    override suspend fun listByCategory(categoryId: String, page: Int): List<Vod> =
-        if (categoryId == ContentRepository.CATEGORY_RECOMMEND) {
-            PreviewVods.vods
-        } else {
-            PreviewVods.vods.filter { it.categoryId == categoryId }
-        }
+    override suspend fun listByCategory(categoryId: String, page: Int): VodPage =
+        VodPage(
+            vods = if (categoryId == ContentRepository.CATEGORY_RECOMMEND) {
+                PreviewVods.vods
+            } else {
+                PreviewVods.vods.filter { it.categoryId == categoryId }
+            },
+            // 夹具只有一页：预览稿里不该出现"还在往下拉"这个状态
+            totalPages = 1,
+        )
 
     override suspend fun detail(vodId: String): Vod? = PreviewVods.vodById(vodId)
 

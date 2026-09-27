@@ -56,9 +56,20 @@ class HomeFeedState(
     var selectedIndex: Int by mutableIntStateOf(0)
         private set
 
+    /**
+     * 追加页的状态。与首屏那份 [vods] 分开：首屏是「加载中 / 好 / 坏」三态，
+     * 而追加同时要表达三件互不排斥的事 —— 在拉、上一发失败、后面还有没有。
+     */
+    private val _more = MutableStateFlow(MorePages())
+    val more: StateFlow<MorePages> = _more.asStateFlow()
+
     private var sourceId: String? = null
     private var categoriesJob: Job? = null
     private var vodsJob: Job? = null
+    private var moreJob: Job? = null
+
+    /** 已加载到第几页。只由 [reloadVods] 与 [loadMore] 改写。 */
+    private var page = 1
 
     /**
      * 当前要拉的分类 id。
@@ -98,16 +109,76 @@ class HomeFeedState(
         }
     }
 
-    /** 拉当前分类的内容。 */
+    /** 拉当前分类的**第一页**。 */
     fun reloadVods() {
         if (sourceId == null) return
         val categoryId = selectedCategoryId
         // 取消上一次：快速连点分类时，先发的那个可能后到，把新分类的内容盖回旧的
         vodsJob?.cancel()
+        // 追加那一路也要停：留着的话上一分类的第 2 页会追加到新分类下面
+        moreJob?.cancel()
+        page = 1
+        _more.value = MorePages()
         vodsJob = scope.launch {
             _vods.value = LoadState.Loading
-            _vods.value = load { content.listByCategory(categoryId) }
+            when (val result = load { content.listByCategory(categoryId) }) {
+                is LoadState.Ready -> {
+                    _vods.value = LoadState.Ready(result.value.vods)
+                    _more.value = MorePages(hasMore = result.value.hasMoreAfter(1))
+                }
+                // 首屏就失败时不再摆出「加载更多」—— 界面已经在整页报错了
+                is LoadState.Failed -> _vods.value = result
+                LoadState.Loading -> Unit
+            }
         }
+    }
+
+    /**
+     * 追加下一页。正在拉、或者已经没有下一页时是**空操作** ——
+     * 界面的触底事件会连着调好几次，去重放在这里比放在界面里可靠。
+     */
+    fun loadMore() {
+        if (sourceId == null) return
+        val current = _more.value
+        if (current.loading || !current.hasMore) return
+
+        val categoryId = selectedCategoryId
+        val next = page + 1
+        moreJob?.cancel()
+        moreJob = scope.launch {
+            _more.value = current.copy(loading = true, error = null)
+            when (val result = load { content.listByCategory(categoryId, next) }) {
+                is LoadState.Ready -> {
+                    // ⚠️ 这一发飞了这么久，分类可能已经换了：整发丢弃。不丢的话上一分类的
+                    // 第 2 页会追加到新分类的列表下面，而 page 也跟着串了
+                    if (categoryId != selectedCategoryId) return@launch
+                    page = next
+                    val grew = append(result.value.vods)
+                    _more.value = MorePages(
+                        // 一条新条目都没进来也算到底：源拿重复项充数时靠这句收尾，否则会一直拉
+                        hasMore = result.value.hasMoreAfter(next) && grew,
+                    )
+                }
+                is LoadState.Failed -> {
+                    if (categoryId != selectedCategoryId) return@launch
+                    // 保留 hasMore：界面靠它给重试入口，失败不该把后面的内容一并作废
+                    _more.value = _more.value.copy(loading = false, error = result.message)
+                }
+                LoadState.Loading -> Unit
+            }
+        }
+    }
+
+    /**
+     * 追加一页，按 id 去重。返回**有没有新条目** —— 源翻页时常有重复项，
+     * 而 LazyGrid 的 key 一旦撞车是直接崩，不是显示两张。
+     */
+    private fun append(more: List<Vod>): Boolean {
+        val current = (_vods.value as? LoadState.Ready)?.value ?: return false
+        val merged = (current + more).distinctBy { it.id }
+        if (merged.size == current.size) return false
+        _vods.value = LoadState.Ready(merged)
+        return true
     }
 
     private fun readyCategories(): List<Category>? =
@@ -125,3 +196,16 @@ class HomeFeedState(
         LoadState.Failed(e.message ?: "加载失败")
     }
 }
+
+/**
+ * 追加页的三件事。**分成三个字段而不是一个枚举**：拉取中失败可以同时为真
+ * （上一发挂了、用户又滑到底触发了一次），而"还有没有下一页"与两者都不冲突。
+ *
+ * @param hasMore 后面还有内容。false 时界面在网格末尾交代一句「已显示全部」，首屏也是 false（还没问出来）。
+ * @param error 上一发追加的失败原因。**不影响已显示的列表** —— 只是网格末尾多一行重试。
+ */
+data class MorePages(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val hasMore: Boolean = false,
+)

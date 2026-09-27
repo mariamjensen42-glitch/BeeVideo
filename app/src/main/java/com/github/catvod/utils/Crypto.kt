@@ -24,42 +24,24 @@ import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * 加解密工具 —— **本项目自带的兼容层**，逐行对齐参考宿主的
- * `catvod/src/main/java/com/github/catvod/utils/Crypto.java`（240 行）。
+ * 加解密工具 —— **本项目自带的兼容层**，逐行对齐参考宿主的 `Crypto.java`。
  *
- * ─── 谁在用 ──────────────────────────────────────────────────────────
- * JS 爬虫通过 `Global` 暴露的四个函数，全都是 **JS 侧主动调**：
- * ```
- * md5X(text)                                    消息摘要
- * aesX(mode, encrypt, input, inB64, key, iv, outB64)
- * desX(mode, encrypt, input, inB64, key, iv, outB64)
- * rsaX(mode, pub, encrypt, input, inB64, key, outB64)
- * ```
- * 真实 drpy 源里大量站点用它们做接口签名 —— 算法错一位，表现是**接口返回 403
- * 或空数据**，日志里什么都看不出来。所以这里是"要么完全对、要么完全不对"的一块。
+ * JS 爬虫通过 `Global` 暴露的 `md5X` / `aesX` / `desX` / `rsaX` 都由 JS 侧主动调，
+ * 真实 drpy 源里大量站点用它们做接口签名 —— 算法错一位的表现是**接口 403 或空数据**，
+ * 日志里什么都看不出来。这里"要么完全对、要么完全不对"。
  *
- * ─── 几个不是随手写的细节 ────────────────────────────────────────────
- * 1. **密钥/IV 用 `Arrays.copyOf` 补零到块长**（[padParameter]），**不**做哈希、
- *    **不**截断超长密钥。这是 JS 侧的既定语义：`aesX(… "key", …)` 里给个短 key
- *    是最常见的写法，补零之后 AES-128 直接用。
- * 2. **DES 用的是 `DESede`（3DES），不是 `DES`**。两把 16 字节密钥会被
- *    [getDesEdeKey] 展开成 24 字节（K1|K2|K1）—— 这正是 3DES 的两密钥模式。
- *    写成单重 DES 会让**所有** desX 调用算错。
- * 3. **RSA 要分块**（[transformRsa]）：RSA 单次能加密的长度由模长和填充决定，
- *    长文本必须按块切。而且 `NoPadding` 模式下**末块要左补零**
- *    （[transformRsaBlock]）—— 这是 JS 侧的约定，不是笔误。
- * 4. **失败一律返回空串**，不抛。JS 侧拿到空串会自己走"签名失败"分支，
- *    比抛异常穿到 JS 解释器里更好收场。
+ * 几个不是随手写的细节：
+ *  1. ⚠️ 密钥/IV 用 `Arrays.copyOf` **补零**到块长（[padParameter]），**不**做哈希、
+ *     **不**截断超长密钥 —— 这是 JS 侧的既定语义（短 key + 补零后直接当 AES-128 用）。
+ *  2. ⚠️ DES 用的是 `DESede`（3DES）而不是 `DES`：16 字节密钥经 [getDesEdeKey] 展开成
+ *     24 字节（K1|K2|K1）。写成单重 DES 会让**所有** desX 调用算错。
+ *  3. ⚠️ RSA 要分块（[transformRsa]），且 `NoPadding` 下**末块要左补零**
+ *     （[transformRsaBlock]）—— 这是 JS 侧的约定，不是笔误。
+ *  4. ⚠️ 失败一律返回空串、不抛：JS 侧拿到空串会走"签名失败"分支，比异常穿过解释器好收场。
  *
- * ─── ⚠️ 与参考实现的差异：Base64 不用 `android.util.Base64` ────────────
- * 理由同 [Util]：`unitTests.isReturnDefaultValues = true` 会让 android.jar 的桩
- * **返回 null 而不是抛异常**，于是纯 JVM 单测里的加密结果静默变错。
- *
- * 参考实现的两处 flags 在这里的对应关系：
- *   - `Base64.decode(input.replace('_','/').replace('-','+'), Base64.DEFAULT)`
- *     → 先做同样的字母表归一，再走标准解码器（见 [decode]）；
- *   - `Base64.encodeToString(output, Base64.NO_WRAP)`
- *     → `Base64.getEncoder()`，本来就不换行。
+ * ⚠️ Base64 不用 `android.util.Base64`，理由同 [Util]：`isReturnDefaultValues = true`
+ * 会让桩**返回 null 而不是抛异常**，纯 JVM 单测里的加密结果会静默变错。
+ * 参考实现的两处 flags 对应关系：`decode` 先做 `_`/`-` 字母表归一，`encode` 本来就不换行。
  */
 object Crypto {
 
@@ -218,10 +200,7 @@ object Crypto {
     private fun getDesTransformation(mode: String): String =
         if (mode.startsWith("DESede/CBC")) "DESede/CBC/PKCS5Padding" else mode + "Padding"
 
-    /**
-     * 16 字节密钥展开成 24 字节（K1|K2|K1）—— 3DES 的两密钥模式。
-     * 长度已经是 24（或别的值）时原样返回。
-     */
+    /** 16 字节密钥展开成 24 字节（K1|K2|K1）—— 3DES 的两密钥模式。 */
     private fun getDesEdeKey(key: String): ByteArray {
         val bytes = padParameter(key.toByteArray(StandardCharsets.UTF_8), DES_EDE_TWO_KEY_SIZE)
         if (bytes.size != DES_EDE_TWO_KEY_SIZE) return bytes
@@ -285,7 +264,7 @@ object Crypto {
         length: Int,
         blockSize: Int,
     ): ByteArray {
-        // NoPadding 下"不满一块"必须是**左补零**（大整数是右对齐的）
+        // ⚠️ NoPadding 下"不满一块"必须是**左补零**（大整数右对齐），这是 JS 侧的约定
         if (mode != RsaMode.NO_PADDING || length == blockSize) return cipher.doFinal(input, offset, length)
         val padded = ByteArray(blockSize)
         System.arraycopy(input, offset, padded, blockSize - length, length)
@@ -306,12 +285,7 @@ object Crypto {
         if (base64) Base64.getEncoder().encodeToString(output)
         else String(output, StandardCharsets.UTF_8)
 
-    /**
-     * PEM 正文解码。
-     *
-     * 比参考实现多做了两件事，都是"更宽容"的方向，且不改变合法输入的结果：
-     * 剥掉残留空白（PEM 里本来就可能有）、补齐被省略的 `=` 填充。
-     */
+    /** PEM 正文解码：剥掉残留空白、补齐被省略的 `=`（更宽容，不改变合法输入的结果）。 */
     private fun decodeBase64(value: String): ByteArray {
         val cleaned = value.filterNot { it.isWhitespace() }
         val remainder = cleaned.length % 4

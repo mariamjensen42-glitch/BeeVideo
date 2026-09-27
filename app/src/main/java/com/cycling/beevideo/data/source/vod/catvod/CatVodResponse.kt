@@ -2,6 +2,7 @@ package com.cycling.beevideo.data.source.vod.catvod
 
 import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -12,13 +13,7 @@ data class PlaySource(
     val parse: Boolean,
 )
 
-/**
- * 首页内容。
- *
- * CatVod 的 `homeContent` 一次返回两样东西：**分类**，以及一批**推荐内容**。
- * 后者是关键 —— 没有它，首页第一屏就只能是一串筛选按钮，用户得先点一下
- * 才看得见内容。协议里这两样在同一个响应里，所以这里也一起返回。
- */
+/** CatVod 的 `homeContent` 一次返回**分类**与一批**推荐内容**，协议里在同一个响应里。 */
 data class HomeContent(
     val categories: List<Category>,
     val featured: List<Vod>,
@@ -31,16 +26,13 @@ data class HomeContent(
 /**
  * CatVod 响应的解析。
  *
- * ─── 为什么一套解析器能同时吃 JSON 源和 spider ────────────────────────
- * 这不是巧合：CatVod 协议**就是**要求 spider 的返回值与内建 JSON 源的返回值同构 ——
- * `categoryContent` 一律返回 `{list:[Vod], page, pagecount}`，`detailContent` 一律返回
- * `{list:[Vod]}`，`homeContent` 一律返回 `{class:[{type_id,type_name}]}`。
- * 所以 JSON 源、XML 源、jar 源三者在"响应长什么样"这一层是统一的，
- * 差别只在"怎么把响应拿到手"。
+ * 一套解析器能同时吃 JSON 源和 spider 不是巧合：CatVod 协议**就是**要求 spider 的返回值
+ * 与内建 JSON 源同构（`categoryContent` 返回 `{list:[Vod], page, pagecount}`、
+ * `detailContent` 返回 `{list:[Vod]}`、`homeContent` 返回 `{class:[…]}`），
+ * 三者的差别只在"怎么把响应拿到手"。
  *
- * ─── 字段值可能是数字也可能是字符串 ──────────────────────────────────
- * `vod_id` 在有些源里是 `123`（数字），有些是 `"123"`（字符串），还有的是
- * `"123-1-1"` 这种复合 id。统一按字符串取，别做数值转换 —— 复合 id 转不动。
+ * `vod_id` 在有些源里是 `123`、有些是 `"123"`、还有 `"123-1-1"` 这种复合 id ——
+ * 统一按字符串取，别做数值转换，复合 id 转不动。
  */
 object CatVodResponse {
 
@@ -52,7 +44,6 @@ object CatVodResponse {
 
     /** 同一个解析，但输入已经是对象（spider 源与 JSON 源共用同一条路径）。 */
     private fun parseCategories(root: JSONObject): List<Category> {
-        // 有的源把 class 写成 "class"，有的在列表响应里同样用这个键
         val arr = root.optJSONArray("class") ?: return emptyList()
         return buildList {
             for (i in 0 until arr.length()) {
@@ -67,9 +58,7 @@ object CatVodResponse {
 
     /**
      * 首页内容：`{"class":[…],"list":[Vod]}`。
-     *
-     * `list` 缺失是正常的（有些源只在首页给分类），这时 [HomeContent.featured]
-     * 为空，界面退回"只有筛选行"的形态。
+     * `list` 缺失是正常的（有些源只在首页给分类），界面退回"只有筛选行"的形态。
      */
     fun parseHome(json: String, siteKey: String): HomeContent {
         val root = optObject(json) ?: return HomeContent.Empty
@@ -82,14 +71,37 @@ object CatVodResponse {
     /**
      * 内容列表。响应形如 `{"list":[Vod], "page":1, "pagecount":100}`。
      *
-     * @param siteKey    站点标识。**会拼进 `Vod.id`** —— 不同站点的 `vod_id` 完全可能撞车
-     *                   （都是 "1"），不隔离的话跨站点跳转就会串数据。
+     * @param siteKey **会拼进 `Vod.id`** —— 不同站点的 `vod_id` 完全可能撞车（都是 "1"），
+     *   不隔离的话跨站点跳转就会串数据。
      * @param categoryId 本次请求的分类，列表项里通常不带这个信息，由调用方给。
      */
     fun parseVods(json: String, siteKey: String, categoryId: String): List<Vod> {
         val root = optObject(json) ?: return emptyList()
         return parseVods(root.optJSONArray("list"), siteKey, categoryId)
     }
+
+    /**
+     * 分类的一页。**列表和页数必须一起解析** —— 分头调两次就得把 JSON 读两遍。
+     *
+     * [VodPage.totalPages] 为 null 表示源没给：老爬虫只吐 `{list:[…]}`，这是常态不是异常。
+     */
+    fun parsePage(json: String, siteKey: String, categoryId: String): VodPage {
+        val root = optObject(json) ?: return VodPage(emptyList(), null)
+        return VodPage(
+            vods = parseVods(root.optJSONArray("list"), siteKey, categoryId),
+            totalPages = totalPages(root),
+        )
+    }
+
+    /**
+     * 只读页数，不解析列表 —— MacCMS 的 `ac=list` 精简响应也带 `pagecount`。
+     * 取不到（缺字段 / 0 / 负数）一律返回 null：**"不知道"不能被写成"只有一页"**，
+     * 那会让界面把还有内容的源当成到底了。
+     */
+    fun parseTotalPages(json: String): Int? = optObject(json)?.let(::totalPages)
+
+    private fun totalPages(root: JSONObject): Int? =
+        root.optInt("pagecount", 0).takeIf { it > 0 }
 
     private fun parseVods(arr: JSONArray?, siteKey: String, categoryId: String): List<Vod> {
         if (arr == null) return emptyList()
@@ -117,20 +129,15 @@ object CatVodResponse {
         return PlaySource(
             url = url,
             headers = readHeaders(root.opt("header")),
-            // parse 缺省按 0 处理：直接当直链试，失败了播放器自己会报错，
-            // 比反过来（把直链当网页去嗅探）体面得多
+            // parse 缺省按 0：直接当直链试，比反过来（把直链当网页去嗅探）体面得多
             parse = root.optInt("parse", 0) == 1,
         )
     }
 
-    // ------------------------------------------------------------------
-
     private fun toVod(o: JSONObject, siteKey: String, categoryId: String): Vod? {
         val sourceId = o.str("vod_id")
-        if (sourceId.isEmpty()) {
-            // 没有 id 就既不能进详情也不能播放，留着只会变成一张点了没反应的卡
-            return null
-        }
+        // 没有 id 就既不能进详情也不能播放，留着只会变成一张点了没反应的卡
+        if (sourceId.isEmpty()) return null
         return Vod(
             id = vodId(siteKey, sourceId),
             name = o.str("vod_name"),
@@ -149,14 +156,8 @@ object CatVodResponse {
     }
 
     /**
-     * 封面地址的清洗。
-     *
-     * 三种脏数据都真实见过：
-     *   - 多个地址用 `$$$` 拼在一起（源站没决定用哪张）
-     *   - 前面带 `//`（协议相对地址，OkHttp 会当成相对路径）
-     *   - 干脆是个空格或 `null` 字面量
-     *
-     * 统一处理掉，界面层拿到空串就画占位、拿到就画图，不需要再判断。
+     * 封面地址的清洗。三种脏数据都真实见过：多个地址用 `$$$` 拼在一起、
+     * 前面带 `//`（协议相对地址，OkHttp 会当成相对路径）、干脆是空格。
      */
     private fun normalizePic(raw: String): String {
         val first = raw.split("\$\$\$").firstOrNull().orEmpty().trim()
@@ -174,10 +175,7 @@ object CatVodResponse {
         return vodId.substring(0, i) to vodId.substring(i + 1)
     }
 
-    /**
-     * `header` 有两种写法：JSON 字符串，或者直接是个对象。
-     * 解析失败一律当"没有自定义头"，不要因此让整个播放流程挂掉。
-     */
+    /** `header` 有两种写法：JSON 字符串，或者直接是个对象。解析失败一律当"没有自定义头"。 */
     private fun readHeaders(raw: Any?): Map<String, String> {
         if (raw == null || raw == JSONObject.NULL) return emptyMap()
         val obj = when (raw) {
@@ -218,7 +216,7 @@ object CatVodResponse {
     /**
      * 取字符串字段，**把 `null` 和缺字段都归一成空串**。
      *
-     * 不能直接用 `optString`：`org.json` 遇到 JSON 的 `null` 会返回字面量 `"null"`，
+     * ⚠️ 不能直接用 `optString`：`org.json` 遇到 JSON 的 `null` 会返回字面量 `"null"`，
      * 于是界面就会理直气壮地显示四个字母。
      */
     private fun JSONObject.str(key: String): String {
@@ -227,6 +225,6 @@ object CatVodResponse {
     }
 }
 
-/** 供 XPath 源复用：把一串同名字段拼成 JSONObject 之外的结构时不至于重复代码。 */
+/** 供 XPath 源复用。 */
 internal fun JSONArray.objects(): List<JSONObject> =
     (0 until length()).mapNotNull { optJSONObject(it) }

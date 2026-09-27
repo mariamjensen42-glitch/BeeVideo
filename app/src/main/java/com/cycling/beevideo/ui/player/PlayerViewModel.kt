@@ -21,6 +21,8 @@ class PlayerViewModel(
     library: LibraryRepository,
     vodId: String,
     initialEpisodeIndex: Int,
+    initialLineIndex: Int,
+    autoPlayNext: Boolean,
 ) : ViewModel() {
 
     val playback = PlayerPlaybackState(
@@ -28,6 +30,8 @@ class PlayerViewModel(
         library = library,
         vodId = vodId,
         initialEpisodeIndex = initialEpisodeIndex,
+        initialLineIndex = initialLineIndex,
+        autoPlayNext = autoPlayNext,
         scope = viewModelScope,
     )
 
