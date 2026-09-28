@@ -50,6 +50,12 @@ nanohttpd = "2.3.1"
 #   wrapper-android —— AAR：`com.whl.quickjs.android.QuickJSLoader` + libquickjs.so（各 ABI）。
 # 版本 3.2.3 就是参考宿主钉的那个，两边行为要对齐，别自行升级。
 quickjs = "3.2.3"
+# HTML 解析：`pdfh` / `pdfa` / `pd` 三个 JS 全局函数（drpy 系源在初始化阶段就要用）。
+# 参考实现 com.github.catvod.js.utils.Parser 就是基于 jsoup 写的，逐行翻译它能
+# 保持选择器语义一致 —— 那是几万个 csp/drpy 源赖以工作的规则语法。
+# ⚠️ 不能改用 assets 里的 cheerio.min.js 顶替：QuickJS 里每调一次 pdfh 都要重解析
+# 一遍 HTML，而 pdfh 是按"每个列表项 × 每个字段"调用的量级。
+jsoup = "1.21.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -114,6 +120,9 @@ gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 # QuickJS 绑定，见上面 quickjs 版本号的注释
 quickjs-android = { group = "wang.harlon.quickjs", name = "wrapper-android", version.ref = "quickjs" }
 quickjs-java = { group = "wang.harlon.quickjs", name = "wrapper-java", version.ref = "quickjs" }
+
+# HTML 解析（pdfh/pdfa/pd），见上面 jsoup 版本号的注释
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 
 # 持久化：观看进度与收藏。只有两张表、两个查询，用 Room 而不是手写 SQLiteOpenHelper
 # —— 手写的话「列名对不上」只能等到运行时才炸。

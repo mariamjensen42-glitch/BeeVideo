@@ -41,6 +41,15 @@ keys/
 # （文件保留在本地，只是不进版本库）
 /docs/screenshots/release-real-source-*.png
 
+# 真机截图目录：绝大多数截图里带着真实内容源的站点名与推广二维码，公开仓库不能有。
+# （v1.0.0 之前进来过几张空态截图，保留在版本库里不动，但不再往里加）
+.workbuddy/shots/
+# `uiautomator dump` 的原始 xml：几十 KB 的节点树，只是排查时的中间产物
+.workbuddy/ui-dump.xml
+
+# Kotlin 2.x 的会话目录（增量编译的本地状态），与 build/ 一样是一次性的
+.kotlin/
+
 # 临时日志与中间产物
 /.workbuddy/tmp/
 

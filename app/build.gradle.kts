@@ -113,6 +113,14 @@ android {
     }
 }
 
+// Compose 稳定性声明。理由见 `compose-stability.conf` 头部：把 domain 模型从 unstable
+// 拉回 stable，跳过检查才按 `equals()` 走（强跳过模式下 unstable 是引用比较 `===`）。
+composeCompiler {
+    stabilityConfigurationFiles.add(
+        layout.projectDirectory.file("compose-stability.conf")
+    )
+}
+
 /*
  * Room 的 schema 导出目录。
  *
@@ -168,6 +176,12 @@ dependencies {
     // ⚠️ 它带各 ABI 的 libquickjs.so，release 体积会明显变大（几个 MB 量级）。
     implementation(libs.quickjs.android)
     implementation(libs.quickjs.java)
+
+    // `pdfh` / `pdfa` / `pd` / `pdfl` —— drpy 系源在**初始化阶段**就会调用它们
+    // （`lib/drpy2.min.js` 顶层 `const defaultParser = { pdfh: pdfh, … }`），
+    // 缺一个就是"所有 .js 源一起报 pdfh is not defined"。
+    // 实测所依赖的 spider jar 并不提供 com.github.catvod.js.Function，只能宿主自己实现。
+    implementation(libs.jsoup)
 
     implementation(libs.androidx.compose.material.icons.extended)
 
