@@ -4,10 +4,12 @@ import com.cycling.beevideo.domain.model.Category
 import com.cycling.beevideo.domain.model.PlayTarget
 import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.ui.components.LoadState
 import com.cycling.beevideo.ui.preview.PreviewVods
 import java.io.IOException
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -88,7 +90,7 @@ class HomeFeedStateTest {
 
     @Test
     fun `内容加载失败进入 Failed 并带上原因`() = runTest {
-        val content = RecordingContentRepository(vodsResult = { throw IOException("内容挂了") })
+        val content = RecordingContentRepository(vodsResult = { _, _ -> throw IOException("内容挂了") })
         val state = feedState(content)
 
         state.setSource(SOURCE)
@@ -139,6 +141,98 @@ class HomeFeedStateTest {
         assertEquals(listOf("categories", "listByCategory(${ContentRepository.CATEGORY_RECOMMEND})"), content.calls)
     }
 
+    // ------------------------------------------------------------------ 分页
+
+    /** 触底追加：第 2 页**接在**原有列表后面，而不是把已经看到的内容换掉。 */
+    @Test
+    fun `追加下一页接在列表后面`() = runTest {
+        val content = RecordingContentRepository(vodsResult = { _, page -> twoPages(page) })
+        val state = feedState(content)
+        state.setSource(SOURCE)
+        advanceTimeBy(1)
+        val firstPage = state.vods.items.size
+
+        state.loadMore()
+        advanceTimeBy(1)
+
+        assertEquals(listOf(1, 2), content.pages)
+        assertEquals("两页合起来就是全部条目", PreviewVods.vods.size, state.vods.items.size)
+        assertTrue("第 2 页必须接在后面：$firstPage", state.vods.items.size > firstPage)
+    }
+
+    /** 源说了共 2 页，取完就该收手 —— 界面的触底事件会一直调 `loadMore`。 */
+    @Test
+    fun `到底之后不再请求下一页`() = runTest {
+        val content = RecordingContentRepository(vodsResult = { _, page -> twoPages(page) })
+        val state = feedState(content)
+        state.setSource(SOURCE)
+        advanceTimeBy(1)
+
+        state.loadMore()
+        advanceTimeBy(1)
+        state.loadMore()
+        advanceTimeBy(1)
+
+        assertEquals(listOf(1, 2), content.pages)
+        assertTrue("到底要如实上报，界面靠它显示「已显示全部」", !state.more.value.hasMore)
+    }
+
+    /**
+     * 源没给 `pagecount` 时（老爬虫只吐 `{list:[…]}`），判据退化成"这一页有东西就继续"。
+     * 所以源拿重复项充数时必须停得下来 —— 否则触底会无限空转。
+     */
+    @Test
+    fun `源没给页数时重复的一页也算到底`() = runTest {
+        val same = PreviewVods.vods
+        val content = RecordingContentRepository(vodsResult = { _, _ -> VodPage(same, null) })
+        val state = feedState(content)
+        state.setSource(SOURCE)
+        advanceTimeBy(1)
+
+        state.loadMore()
+        advanceTimeBy(1)
+
+        assertEquals("内容不该变多", same.size, state.vods.items.size)
+        assertTrue("重复页不许再往下拉", !state.more.value.hasMore)
+    }
+
+    /** 追加失败**不能动已经显示的内容**：多滑一屏失败就清空整页是最糟的表现。 */
+    @Test
+    fun `追加失败保留已加载的列表并留下重试入口`() = runTest {
+        val content = RecordingContentRepository(
+            vodsResult = { _, page ->
+                if (page == 1) twoPages(1) else throw IOException("第二页挂了")
+            },
+        )
+        val state = feedState(content)
+        state.setSource(SOURCE)
+        advanceTimeBy(1)
+        val loaded = state.vods.items.size
+
+        state.loadMore()
+        advanceTimeBy(1)
+
+        assertEquals("列表不该被失败清掉", loaded, state.vods.items.size)
+        assertEquals("第二页挂了", state.more.value.error)
+        assertTrue("失败后仍要留着重试的余地", state.more.value.hasMore)
+    }
+
+    /** 换分类等于重新开始：页码归零，上一分类的第 2 页不许追加到新分类下面。 */
+    @Test
+    fun `切分类会重置分页`() = runTest {
+        val content = RecordingContentRepository(vodsResult = { _, page -> twoPages(page) })
+        val state = feedState(content)
+        state.setSource(SOURCE)
+        advanceTimeBy(1)
+        state.loadMore()
+        advanceTimeBy(1)
+
+        state.selectCategory(2)
+        advanceTimeBy(1)
+
+        assertEquals("新分类必须从第 1 页重新开始", listOf(1, 2, 1), content.pages)
+    }
+
     // ------------------------------------------------------------------ 夹具
 
     private fun TestScope.feedState(content: ContentRepository) =
@@ -147,6 +241,19 @@ class HomeFeedStateTest {
     private companion object {
         const val SOURCE = "mock_json"
     }
+}
+
+/** 首页那一栏当前显示的全部条目；未就绪时为空。 */
+private val StateFlow<LoadState<List<Vod>>>.items: List<Vod>
+    get() = (value as? LoadState.Ready)?.value.orEmpty()
+
+/** 两页数据：前半 / 后半，源声明共 2 页。 */
+private fun twoPages(page: Int): VodPage {
+    val half = PreviewVods.vods.size / 2
+    return VodPage(
+        vods = if (page == 1) PreviewVods.vods.take(half) else PreviewVods.vods.drop(half),
+        totalPages = 2,
+    )
 }
 
 /**
@@ -163,19 +270,24 @@ class HomeFeedStateTest {
  */
 private class RecordingContentRepository(
     private val categoriesResult: () -> List<Category> = { PreviewVods.categories },
-    private val vodsResult: (String) -> List<Vod> = { PreviewVods.vods },
+    /** 按 (分类, 页) 给一页。默认只有一页 —— 分页用例自己传 [twoPages]。 */
+    private val vodsResult: (String, Int) -> VodPage = { _, _ -> VodPage(PreviewVods.vods, 1) },
 ) : ContentRepository {
 
     val calls = mutableListOf<String>()
+
+    /** 每次请求落在第几页。分页用例靠它断言"没有把同一页拉两遍"。 */
+    val pages = mutableListOf<Int>()
 
     override suspend fun categories(): List<Category> {
         calls += "categories"
         return categoriesResult()
     }
 
-    override suspend fun listByCategory(categoryId: String, page: Int): List<Vod> {
+    override suspend fun listByCategory(categoryId: String, page: Int): VodPage {
         calls += "listByCategory($categoryId)"
-        return vodsResult(categoryId)
+        pages += page
+        return vodsResult(categoryId, page)
     }
 
     override suspend fun detail(vodId: String): Vod? = null

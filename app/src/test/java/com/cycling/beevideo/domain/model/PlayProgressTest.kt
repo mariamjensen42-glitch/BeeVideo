@@ -1,6 +1,8 @@
 package com.cycling.beevideo.domain.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -100,5 +102,22 @@ class PlayProgressTest {
                 episodeIndex = 2,
             ),
         )
+    }
+
+    /**
+     * 「已看完」的标记只在历史页上看得见，但它与 [resumePositionMs] 的结尾守卫**同源**：
+     * 两处各写一套的话，会出现"首页说已看完、点进去却从头播"，而这种不一致没人会当成 bug。
+     */
+    @Test
+    fun `接近结尾就是已看完，与续播返回 0 的边界一致`() {
+        assertTrue(progress(positionMs = 2_690_000L, durationMs = 2_700_000L).isFinished())
+        // 差 1ms 落在守卫之外 —— 与上面那条 resumePositionMs 的用例是同一条边界
+        assertFalse(progress(positionMs = 2_690_000L - 1, durationMs = 2_700_000L).isFinished())
+    }
+
+    @Test
+    fun `时长未知时永远不算已看完`() {
+        // 没有分母就没有「看完」可言；判成看完会让这条记录从首页的「继续观看」里消失
+        assertFalse(progress(positionMs = 99_999_999L, durationMs = 0L).isFinished())
     }
 }

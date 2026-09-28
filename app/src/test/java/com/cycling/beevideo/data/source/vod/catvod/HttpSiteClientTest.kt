@@ -78,6 +78,31 @@ class HttpSiteClientTest {
         assertEquals(3, url.querySize())
     }
 
+    /**
+     * 页数必须跟着列表一起出来：界面的"还有没有下一页"全靠它。
+     * 丢了这个字段，上层只剩"这一页看起来不满"可猜 —— 猜错就是把内容截断。
+     */
+    @Test
+    fun `分类响应里的 pagecount 跟着列表一起出来`() = runBlocking {
+        val client = JsonBodyClient(
+            site = testSite(),
+            body = """{"list":[{"vod_id":"1","vod_name":"片名"}],"page":1,"pagecount":7}""",
+        )
+
+        val page = client.categoryContent(tid = "movie", page = 1)
+
+        assertEquals(1, page.vods.size)
+        assertEquals(7, page.totalPages)
+    }
+
+    /** 源没给 `pagecount`（老爬虫只吐 `{list:[…]}`）时是**未知**，不能当成"只有一页"。 */
+    @Test
+    fun `响应里没有 pagecount 页数就是未知`() = runBlocking {
+        val client = JsonBodyClient(site = testSite(), body = """{"list":[]}""")
+
+        assertNull(client.categoryContent(tid = "1", page = 1).totalPages)
+    }
+
     @Test
     fun `详情发 ac=detail 带 ids`() = runBlocking {
         val client = client()
@@ -333,7 +358,7 @@ class HttpSiteClientTest {
             listOf(vod("site:/vod/1.html", categoryId = "1", pic = "https://img/1.jpg")),
         )
 
-        val vods = client.categoryContent(tid = "movie", page = 1)
+        val vods = client.categoryContent(tid = "movie", page = 1).vods
 
         assertEquals("movie", vods[0].categoryId)
         assertEquals("https://img/1.jpg", vods[0].pic)
@@ -390,18 +415,22 @@ class HttpSiteClientTest {
         api: String = BASE,
         ext: String = "",
         quickSearch: Boolean = false,
-    ) = FakeHttpClient(
-        SiteConfig(
-            key = SITE_KEY,
-            name = "测试源",
-            type = SiteType.JSON,
-            api = api,
-            ext = ext,
-            jar = "",
-            searchable = true,
-            quickSearch = quickSearch,
-            categories = emptyList(),
-        )
+    ) = FakeHttpClient(testSite(api = api, ext = ext, quickSearch = quickSearch))
+
+    private fun testSite(
+        api: String = BASE,
+        ext: String = "",
+        quickSearch: Boolean = false,
+    ) = SiteConfig(
+        key = SITE_KEY,
+        name = "测试源",
+        type = SiteType.JSON,
+        api = api,
+        ext = ext,
+        jar = "",
+        searchable = true,
+        quickSearch = quickSearch,
+        categories = emptyList(),
     )
 
     private fun vod(
@@ -464,4 +493,25 @@ private class FakeHttpClient(site: SiteConfig) : HttpSiteClient(site) {
         vodsQueue.getOrElse(vodsIndex++) { emptyList() }
 
     override fun parseDetail(body: String): Vod? = null
+}
+
+/**
+ * 唯一一个**真解析**响应文本的假客户端 —— 只有"页数有没有被带出来"这件事
+ * 必须从 JSON 走一遍才作数（其它用例喂的是模型，测不到这一层）。
+ */
+private class JsonBodyClient(
+    site: SiteConfig,
+    private val body: String,
+) : HttpSiteClient(site) {
+
+    override suspend fun fetch(url: String): String = body
+
+    override fun parseHome(body: String): HomeContent = HomeContent.Empty
+
+    override fun parseVods(body: String, categoryId: String): List<Vod> =
+        CatVodResponse.parseVods(body, site.key, categoryId)
+
+    override fun parseDetail(body: String): Vod? = null
+
+    override fun parseTotalPages(body: String): Int? = CatVodResponse.parseTotalPages(body)
 }

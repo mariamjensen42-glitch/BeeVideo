@@ -5,12 +5,14 @@ import com.cycling.beevideo.domain.model.PlayProgress
 import com.cycling.beevideo.domain.model.PlayTarget
 import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.ui.components.LoadState
 import com.cycling.beevideo.ui.preview.FakeContentRepository
 import com.cycling.beevideo.ui.preview.FakeLibraryRepository
 import com.cycling.beevideo.ui.preview.PreviewVods
 import java.io.IOException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -27,6 +29,7 @@ import org.junit.Test
  * 用 `TestScope.backgroundScope` 提供加载作用域：`runTest` 结束时自动取消，
  * 不必替换 `Dispatchers.Main`。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class DetailStateTest {
 
     @Test
@@ -117,6 +120,64 @@ class DetailStateTest {
     }
 
     /**
+     * 「从详情页进入播放时优先使用上次的源和线路」这条要求落在这里。
+     *
+     * 进度记的是**线路名**，而路由要的是**线路号** —— 这个换算只有详情到手才能做，
+     * 所以它必须由持有者在两份异步数据都到齐之后补上，界面上没有别的地方能补。
+     */
+    @Test
+    fun `进度里的线路会被自动选中`() = runTest {
+        val state = detailState(
+            library = FakeLibraryRepository(progress = progressAt(1_000L, lineName = LINE_TWO)),
+        )
+
+        state.refreshProgress()
+        // ⚠️ 必须用 advanceTimeBy 而不是 advanceUntilIdle：后者**有意跳过**
+        // backgroundScope 里的任务，而持有者的加载全在 backgroundScope 上。
+        advanceTimeBy(1)
+
+        assertEquals(
+            "上次看的是第二条线路，进来就该停在第二条上",
+            1,
+            state.lineIndex,
+        )
+    }
+
+    /** 用户手动选过之后，进度不许再把它顶回去 —— 那是"我点的没生效"。 */
+    @Test
+    fun `用户自己选过线路之后进度不再改它`() = runTest {
+        val state = detailState(
+            library = FakeLibraryRepository(progress = progressAt(1_000L, lineName = LINE_TWO)),
+        )
+
+        state.selectLine(0)
+        state.refreshProgress()
+        // ⚠️ 必须用 advanceTimeBy 而不是 advanceUntilIdle：后者**有意跳过**
+        // backgroundScope 里的任务，而持有者的加载全在 backgroundScope 上。
+        advanceTimeBy(1)
+
+        assertEquals(0, state.lineIndex)
+    }
+
+    /**
+     * 源改过线路名时**不动**选中项。按序号硬套会把用户带到另一条线路上，
+     * 而那种错跳在界面上表现成"进度对不上"，看起来像续播坏了。
+     */
+    @Test
+    fun `进度里的线路名对不上时不动选中项`() = runTest {
+        val state = detailState(
+            library = FakeLibraryRepository(progress = progressAt(1_000L, lineName = "已下线的线路")),
+        )
+
+        state.refreshProgress()
+        // ⚠️ 必须用 advanceTimeBy 而不是 advanceUntilIdle：后者**有意跳过**
+        // backgroundScope 里的任务，而持有者的加载全在 backgroundScope 上。
+        advanceTimeBy(1)
+
+        assertEquals(0, state.lineIndex)
+    }
+
+    /**
      * 收藏状态是**订阅**的（与进度相反）：本页的按钮会改它，必须立刻反映到图标上。
      */
     @Test
@@ -162,9 +223,9 @@ class DetailStateTest {
     private fun readyProgress(state: DetailState): PlayProgress? =
         (state.progress.value as? LoadState.Ready)?.value
 
-    private fun progressAt(positionMs: Long) = PlayProgress(
+    private fun progressAt(positionMs: Long, lineName: String = LINE_ONE) = PlayProgress(
         vodId = VOD_ID,
-        lineName = "线路一 · 演示",
+        lineName = lineName,
         episodeIndex = 2,
         episodeName = "第 03 集",
         positionMs = positionMs,
@@ -175,6 +236,10 @@ class DetailStateTest {
     private companion object {
         const val VOD_ID = "v01"
         const val FIXED_NOW = 1_700_000_000_000L
+
+        /** 与 `PreviewVods` 里那两条线路的名字一致；对不上就什么都不会发生，且不会报错。 */
+        const val LINE_ONE = "线路一 · 演示"
+        const val LINE_TWO = "线路二 · 备用"
         val VOD_NAME = PreviewVods.vodById(VOD_ID)?.name
     }
 }
@@ -184,7 +249,7 @@ private class FailingContentRepository(private val error: Throwable) : ContentRe
 
     override suspend fun categories(): List<Category> = emptyList()
 
-    override suspend fun listByCategory(categoryId: String, page: Int): List<Vod> = emptyList()
+    override suspend fun listByCategory(categoryId: String, page: Int): VodPage = VodPage(emptyList(), 1)
 
     override suspend fun detail(vodId: String): Vod? = throw error
 

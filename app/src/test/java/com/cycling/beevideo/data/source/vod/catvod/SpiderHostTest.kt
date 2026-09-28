@@ -1,6 +1,7 @@
 package com.cycling.beevideo.data.source.vod.catvod
 
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.domain.model.VodPage
 import com.github.catvod.crawler.Spider
 import com.github.catvod.crawler.SpiderApi
 import org.junit.Assert.assertEquals
@@ -200,7 +201,7 @@ private class StatelessClient(override val site: SiteConfig) : SiteClient {
 
     override suspend fun homeContent(): HomeContent = HomeContent.Empty
 
-    override suspend fun categoryContent(tid: String, page: Int): List<Vod> = emptyList()
+    override suspend fun categoryContent(tid: String, page: Int): VodPage = VodPage(emptyList(), 1)
 
     override suspend fun detailContent(sourceId: String): Vod? = null
 
