@@ -81,6 +81,7 @@ jar 把播放地址指向宿主（`/proxy?do=…`）→ `LocalProxyServer`(NanoH
 
 ## 工具链
 - 构建走 `build_debug.py`（**必须** `--no-daemon --max-workers=1`）；env 需 `JAVA_HOME=…jdk-21`、`GRADLE_USER_HOME=E:\AndroidDev\Gradle`，adb 在 `E:\SoftWare\SDK\platform-tools`。**测试一律 debug 包**；装包+回填源用 `install_debug.py`。
+- ⚠️ **本机 `assembleRelease` 不可靠**：`E:\AndroidDev\Gradle` 是**共享** GRADLE_USER_HOME，别的项目（如 Nocta）在同一 home 里跑构建，一次 `--stop` 就把我们的单次 daemon 掐死 —— 症状是 `packageRelease` 处报 `stop command received`，或**静默 exit 1、零输出**。release 出包**交给 CI**。
 - 路由**必须** `Uri.encode(vodId)`；读取端**不要** decode。
 - ⚠️ adb server 每次调用都被回收 → 要联网必须在**同一次调用里**先建 `adb reverse`；Bash 开头 `export PATH="/c/Program Files/Git/usr/bin:$PATH"`，且**别加管道**。⚠️ `adb shell` 传 `/sdcard/...` 前必须 `export MSYS_NO_PATHCONV=1`，否则被 MSYS 改写成 `C:/.../sdcard/...` → `Error opening file`。
 - ⚠️ 真机 dump/点按用 `ui_dump.py`/`ui_text.py`/`ui_pick.py`/`ui_tap.py`；**dump 完必须先删远端 xml**；**屏外项 bounds 全是 `[0,0][0,0]`** → 先 swipe 滚进可视区；`uiautomator dump` **绝不能写在 Git Bash 里**。
@@ -88,8 +89,8 @@ jar 把播放地址指向宿主（`/proxy?do=…`）→ `LocalProxyServer`(NanoH
 - `TV-Multiplatform-main` / `FongMi/TV` 都是 **GPL-3.0**：只作行为规格，**抄源码 = 整体开源**（例外：JS 引擎部分是高城拍板"逐行翻译"的衍生，**要改回自研先问用户**）。
 
 ## 现状 · 设计稿 · 图标（见 REFERENCE §8）
-**单测 305 全绿**（基线 89）；**媒体分片不过本地代理**。
-⚠️ **release 包从没装到真机跑过**；播放器第 1–3 步已上机验过（09-27：自绘控件 / 手势 + 横屏全屏 / 线路切换 + 自动下一集）。
+**单测 305 全绿**（基线 89）；**媒体分片不过本地代理**。**已发 v1.1.0**（tag → CI Release，APK 11.1 MB、R8 差分全项通过、versionCode 10100）。
+⚠️ **release 包还是没装到真机跑过**（R8 只做了静态接口面差分；验的话要先卸 debug —— 签名不同，**已配源全丢**，装完用 `install_debug.py` 回填）。播放器第 1–3 步已上机验过（09-27：自绘控件 / 手势 + 横屏全屏 / 线路切换 + 自动下一集）。
 待验 `ThemeMode` / 设置页「更换」/ 站点网格 / 启动图标实拍 / 首页去掉刊头后**切分类**（09-28 已上机看过：首屏 = 分类行 → 推荐 12 部 → 三行海报；触底追加页码生效，推荐位末尾显示「已显示全部」）。
 ⚠️ 设计稿两套风格（M3 Expressive / Wayfare）**互斥，落地前必须让高城拍板**，别默默改 `BeeTokens`。
 ⚠️ 启动图标：`mipmap-*dpi/*.webp` **已删别再补回**；`<monochrome>` 指向**单色版**。
