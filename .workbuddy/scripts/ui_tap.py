@@ -56,7 +56,9 @@ def walk(node, stack=()):
 def find(root, needle, use_desc=False):
     hits = []
     for node, ancestors in walk(root):
-        field = node.get("desc" if use_desc else "text") or ""
+        # ⚠️ 属性名是 `content-desc`，不是 `desc` —— 写成 `desc` 永远取到 None，
+        #    表现是 `--desc 搜索` 报「没找到匹配」，而节点其实就在 dump 里。
+        field = node.get("content-desc" if use_desc else "text") or ""
         if not field or needle not in field:
             continue
         # 从自己往上找第一个有真实尺寸的祖先
@@ -95,6 +97,10 @@ def main():
     if not hits:
         print(f"没找到匹配「{needle}」的节点")
         return
+    # ⚠️ 默认取下标 0 会踩坑：子串匹配常常先命中一段长文案（比如搜「嗅探播放」时
+    #    先命中「…只有一级链接直接嗅探播放」），点上去等于点错地方。
+    #    把全等的排前面，「有真实 bounds」的再排前面。
+    hits.sort(key=lambda h: (h[0] != needle, h[1] is None))
     for n, (field, cx, cy, box, clickable) in enumerate(hits):
         print(f"  [{n}] {field!r}  中心 ({cx},{cy})  框 {box}  可点={clickable}")
     if list_only:

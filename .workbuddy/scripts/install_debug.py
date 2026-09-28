@@ -1,7 +1,7 @@
 """装 debug 包 + 直接回填「内容源配置」，绕开 UI 自动化。
 
 为什么不用界面点：
-   设置页的来源 chip 是一行可滚动的 chips，要点中目标得先 uiautomator dump
+   站点列表在弹层里（`SourcePickerSheet`），要点中目标得先开弹层、再 uiautomator dump
    找坐标。而 `uiautomator dump` 在动画期间会失败、**留下上一份 dump 文件**，
    读到的是过期界面 —— 这个坑踩过一次（见 _hop_source.py 与 _list_sources.py）。
    而 debug 包可以 `run-as`，直接写 prefs 是确定性的。
@@ -13,6 +13,8 @@
     python install_debug.py                      # 用默认配置 + 第一个源
     python install_debug.py 糯米                 # 指定 active_source_id（站点 key）
     python install_debug.py 糯米 --keep          # 不重装，只改 source
+    python install_debug.py --config <URL>       # 换一份配置地址（不指定则只改 source）
+    python install_debug.py --config <URL> 白白 --keep   # 换配置 + 选源，不重装
 """
 import os
 import subprocess
@@ -24,7 +26,12 @@ PROJECT = r"D:\Programming\Kotlin\BeeVideo"
 ADB = r"E:\SoftWare\SDK\platform-tools\adb.exe"
 PKG = "com.cycling.beevideo"
 APK = os.path.join(PROJECT, "app", "build", "outputs", "apk", "debug", "app-debug.apk")
-CONFIG_URL = "https://cdn.jsdelivr.net/gh/qist/tvbox@master/0821.json"
+# ⚠️ 必须带镜像前缀，**不能写 `https://cdn.jsdelivr.net/gh/qist/tvbox@master/xxx.json`**：
+#    jsdelivr 现在对 `*.jar` 全节点 403（cdn/gcore/fastly 都一样，响应体 9 字节），
+#    而配置里的 jar 是相对路径（`./jar/fan.txt`），会跟着配置地址一起解析 ——
+#    配置走 jsdelivr，jar 就也走 jsdelivr，于是**每个 `csp_` 源都报「下载 jar 失败」**。
+#    实测 ghfast.top / gh-proxy.com / ghproxy.net 都行（2026-09-27）。
+DEFAULT_CONFIG = "https://ghfast.top/https://raw.githubusercontent.com/qist/tvbox/master/fty.json"
 TMP_ON_DEVICE = "/data/local/tmp/beevideo.content_source.xml"
 
 
@@ -52,10 +59,10 @@ def fetch_sources(url):
     return out
 
 
-def write_prefs(source_id):
+def write_prefs(source_id, config_url):
     xml = ("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
            "<map>\n"
-           f"    <string name=\"config_url\">{sx.escape(CONFIG_URL)}</string>\n"
+           f"    <string name=\"config_url\">{sx.escape(config_url)}</string>\n"
            f"    <string name=\"active_source_id\">{sx.escape(source_id)}</string>\n"
            "</map>\n")
     local = os.path.join(PROJECT, ".workbuddy", "scripts", "_prefs_now.xml")
@@ -81,9 +88,15 @@ def main():
     argv = sys.argv[1:]
     keep = "--keep" in argv
     argv = [a for a in argv if a != "--keep"]
+    config = DEFAULT_CONFIG
+    if "--config" in argv:
+        i = argv.index("--config")
+        config = argv[i + 1]
+        del argv[i:i + 2]
     source = argv[0] if argv else None
 
-    sources = fetch_sources(CONFIG_URL)
+    sources = fetch_sources(config)
+    print(f"配置 {config}")
     print(f"配置里 {len(sources)} 个站点")
     if source is not None and source not in sources:
         print(f"⚠️ 配置里没有 key = {source!r}")
@@ -115,7 +128,7 @@ def main():
         source = next(iter(sources))
         print("未指定 source，用第一个:", source, sources[source][0])
     print(f"写入 prefs: active_source_id = {source!r} ({sources[source][0]})")
-    write_prefs(source)
+    write_prefs(source, config)
 
     sh(ADB, "shell", "am", "force-stop", PKG)
     r = sh(ADB, "shell", "monkey", "-p", PKG,

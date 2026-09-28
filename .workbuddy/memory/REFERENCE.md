@@ -105,7 +105,13 @@ jar  : {absent:306, relative:15, absolute:46}
 - 截图前先查 `dumpsys power` 的 `mWakefulness`：`Asleep` 时 screencap 只得到 ~15KB 纯色图，**极易误判为白屏/崩溃**。
   设备设了锁屏密码，**ADB 无法解锁**，需要用户手动解锁。
 
-## Hero moment 算式与踩坑
+## Hero moment 算式与踩坑（⚠️ 2026-09-28 **组件已删除**，仅存原理）
+> 删除原因：`featured = vods.sortedByDescending(score).take(5)` 的数据源就是下面网格那批 `vods`，
+> 必然重复；且点播源普遍没有 `vod_score`，稳定排序退化成"原序前 5 张"= 网格第一行放大到 200dp。
+> 首屏被吃掉四分之一高度、信息零增量。`HeroCarousel.kt` / `HeroSkeleton` / 5 个 `hero*` 尺寸常量
+> / `home_featured_label|index` 一并删除；`home` 网格第 0 项改由 `categories` 承担（无条件项）。
+> 下面的算式留在库里，因为「CJK display 字号按最窄机型反推」和「Pager contentPadding 语义」两条
+> 是通用结论，将来任何横滑大卡都用得上。
 - 卡片结构：项圆角 **28dp**（与海报网格的 12dp 故意对撞）；片名 `displayMediumEmphasized` **45sp 衬线**；
   卡内「刊头行」= 左 `精选` 印章 + 右 `01/05` 篇次。
 - `heroCardHeight` = **200dp** 的构成：刊头行 28 + 片名一行 52 + 间隔 4 + 元信息 24 + 内边距 40 + 呼吸 52。
@@ -119,15 +125,43 @@ jar  : {absent:306, relative:15, absolute:46}
 - ⚠️ **M3 硬事实：primary 与 primaryContainer 的明暗在两套方案里是对调的** —— 浅色 primary=tone40（深）/
   container=tone84（亮）；深色 primary=tone80（亮）/ container=tone30（深）。所以「要一块最亮的填充」**不能按
   角色名取，要按亮度取**，否则必有一套主题发闷（实测深色下 primaryContainer `#5C4200` 对 surface `#0B0A08`
-  只有 1.9:1，卡片糊进背景）。`HeroCarousel.kt` 的 `heroFills()` 就是干这个的，判据 `surface.luminance() < 0.5f`。
+  只有 1.9:1，卡片糊进背景）。原 `HeroCarousel.kt` 的 `heroFills()` 就是干这个的，判据 `surface.luminance() < 0.5f`；
+  该函数随组件删除，同款判据现在活在 `Shimmer.kt` 的 `SkeletonBlock` 里。
   **不要用 `isSystemInDarkTheme()`**（它读系统设置，`BeeVideoTheme(darkTheme=false)` 的预览稿会取错）。
+
+## 分类分页（2026-09-28）
+**由来**：首页分类页固定只取第 1 页 —— `listByCategory` 的 `page` 参数一直存在、但从没人传第二参，
+于是「电影」永远只有源的第一页（糯米实测 30 部）。而 `SpiderSiteClient` 本来就老实把 pg 传给了爬虫，
+**是我们的 UI 从来没有翻页入口**，不是源的问题。推荐位（`CATEGORY_RECOMMEND`）是首页响应里那一批，
+**没有分页概念**，固定一页。
+
+**翻页判据必须来自源**：CatVod 分类响应是 `{list, page, pagecount}`，而原先 `parseVods` 只取 list、
+把 `pagecount` 丢了 —— 丢了就只能靠"这一页看起来不满"去猜，猜错即静默截断。落地时改成
+`VodPage(vods, totalPages)` 一路带上来（JSON 读根属性 `pagecount`，XML 读 `<list pagecount="…">`；
+取不到 / ≤0 → `null` = 未知，**"不知道"不能写成"只有一页"**）。`hasMoreAfter(page)`：
+`totalPages != null` 时按页数判，否则退化成"本页有内容就续"。
+
+**三层签名**：`SiteClient.categoryContent → VodPage`、`ContentRepository.listByCategory → VodPage`、
+`HomeFeedState.more: StateFlow<MorePages>`（`loading/error/hasMore` 三字段，刻意不给成一个枚举 ——
+"在拉"和"上一发失败"可以同时为真）。
+
+**踩坑**：
+- ⚠️ 追加页**必须 `distinctBy(id)`**：源翻页常有重复项，而 LazyGrid 的 key 撞车是**直接崩**。
+  重复项同时也是"到底"的信号 —— 追加后一条新条目都没进来就停止，否则源拿重复项充数时会无限空转。
+- ⚠️ 切分类/换源要**取消在飞的追加页**，并在回来时比对分类 id 整发丢弃：不丢的话上一分类的
+  第 2 页会追加到新分类的列表下面（`page` 也跟着串）。
+- ⚠️ 追加失败**不能动已显示的列表**（`MorePages.error` 只让网格末尾多一行重试）。
+- 触底判据用「最后可见项下标 ≥ total − 1 − posterColumns」而不是滚动偏移：这一页项高不等（整行项与网格项混排）。
+
+**实测**（糯米，2026-09-28）：电影分类一路追加到 1980 年代的老片（远超 30 部），无 FATAL；
+推荐位 12 部末尾出现「已显示全部」且不再发请求。
 
 ## Insets / Lazy 踩坑原文
 - **嵌套 Scaffold 必须 `consumeWindowInsets(innerPadding)`**，否则每个页面顶栏上方多一条状态栏高度的空白
   （实测 app bar 64dp → 98.9dp）。修法：
   `NavHost(Modifier.fillMaxSize().padding(innerPadding).consumeWindowInsets(innerPadding))`
 - ⚠️ **Lazy 滚动位置 =「首个可见项的 key + 偏移」**：item **插到锚点之前**时会按 key 把锚点搬回顶端，内容被顶出屏幕。
-  **对策：项结构从第一帧起固定**（首页刊头与筛选行无条件进网格，空列表高 0）。
+  **对策：项结构从第一帧起固定**（首页筛选行无条件进网格、且恒为第 0 项；条件项一律排在它之后）。
 - `dialog` 的 `tonalElevation` 是**等级**不是 dp：静置 = Level 3 = 6dp。全屏对话框容器角色 = `surfaceContainerHigh`，
   头部 56dp、左右 24dp。
 - 给官方组件套固定宽度前先读源码（如 `NavigationRail` 内部已有 `windowInsetsPadding` + `widthIn(min=80.dp)`）。
@@ -831,3 +865,222 @@ with zipfile.ZipFile(aar) as z, z.open("classes.jar") as s, open("_m3dsc.jar","w
 > 而 M3 Expressive 的硬约束是"elevation/tonal surface + 官方 15 个 `<role>Emphasized`"。
 > 若真要落地到 Compose，`beeTopAppBarColors()` / `ShortNavigationBar` / `BeeTokens`
 > 那一整套都得换。**出稿阶段只讨论视觉，落地前必须让高城拍板。**
+
+---
+
+# 内容源 / 配置地址体检（2026-09-27）
+
+起因：高城说「就只有那么一个配置地址吗，多来几个」+「修复白白秒播」。顺手把整套
+「一份配置到底能不能用」的判据摸清了，工具 `.workbuddy/scripts/probe_config.py`。
+
+## 1. 致命前提：jsdelivr 拒发 `*.jar`
+
+| 资源 | `cdn.jsdelivr.net` | `ghfast.top` 等镜像 |
+|---|---|---|
+| `*.json` 配置 | 200 | 200 |
+| `*.js` 引擎库 | 200 | 200 |
+| **`*.jar`** | **403（所有节点：cdn / gcore / fastly 都是，响应体 9 字节）** | 200 |
+
+实测（2026-09-27，宿主机直连，非设备问题 —— 设备上同样 403）：
+
+```
+cdn.jsdelivr.net/gh/qist/tvbox@master/jar/spider.jar        → 403 / 9B
+gcore.jsdelivr.net/gh/qist/tvbox@master/jar/spider.jar      → 403 / 9B
+fastly.jsdelivr.net/gh/qist/tvbox@master/jar/spider.jar     → 403 / 9B
+ghfast.top/https://raw.githubusercontent.com/…/spider.jar   → 200 / 1859860B
+gh-proxy.com/…                                              → 200 / 1859860B
+ghproxy.net/…                                               → 200 / 1859860B
+gh.llkk.cc / ghproxy.cc / hub.gitmirror.com / statically.io → 000（连不上）
+gh-proxy.net/…                                              → 429
+```
+
+**为什么这很致命**：配置里的 jar 是**相对路径**（`"spider": "./jar/fan.txt;md5;…"`），
+`CatVodConfig.kt:214` 用 `URI(base).resolve(ref)` 解析 → **jar 会跟着配置地址走**。
+所以配置地址写 jsdelivr，jar 就也落在 jsdelivr 上，**每个 `csp_` 源都报「下载 jar 失败」**
+（真机原文：`读取失败：下载 jar 失败：https://…/jar/spider.jar（HTTP 403）`）。
+
+**解法**：配置地址加镜像前缀 —— `https://ghfast.top/https://raw.githubusercontent.com/qist/tvbox/master/fty.json`。
+`URI.resolve` 会把 `./jar/fan.txt` 拼成 `https://ghfast.top/https://raw.githubusercontent.com/…/jar/fan.txt` ✅。
+**真机验证通过**（见 §4）。
+
+## 2. 体检一份配置看两件事
+
+**(a) 声明的 jar md5 vs 实际内容** —— `DexJarLoader.ensureJar()` 只按声明的 md5
+命名文件、**不校验内容**。声明 md5 与 CDN 上实际内容不符 = 拿着旧名字加载新 dex
+= 报「jar 里找不到类 Xxx」。**不是 App 的 bug，是配置过期**。
+
+`0821.json` 声明 `8432d174…`，实际内容是 `e959d945…` = **同作者 `fty.json` 声明的那份**
+（`fty.json` 就是「修好版」）。
+
+**(b) `csp_` 类命中率** —— 把 jar 的类名抠出来，数配置里 `csp_Xxx` 有几个真存在。
+
+```
+✅ qist/fty.json      站点  47 | .js   3 | csp_  44 | fan.txt 1087KB    | md5 ✔ | 43/44 | 缺 XPathGuard
+✅ qist/dianshi.json  站点 151 | .js  26 | csp_ 103 | spider.jar 1816KB| md5 ✔ | 103/103   ← 但 jar 会崩，见 §3
+✅ qist/jsm.json      站点 150 | .js  25 | csp_ 103 | spider.jar 1816KB| md5 ✔ | 103/103   ← 同上
+✅ qist/0825.json     站点 135 | .js  22 | csp_ 106 | pg_upgraded.jar  | md5 ✔ | 100/106
+✅ qist/9918.json     站点  56 | .js   7 | csp_  24 | pg_upgraded.jar  | md5 ✔ | 24/24
+✅ gao/0821.json      站点  86 | .js  41 | csp_  38 | fan.txt 563KB    | md5 ✔ | 38/38（但 js 引擎全废，见 §3）
+⚠️ qist/0821.json     站点  86 | .js  37 | csp_  42 | fan.txt 1087KB   | md5 ✘ | 29/42   ← 用户当时用的
+⚠️ qist/0826.json     站点  54 | .js   6 | csp_  48 | fan.txt 1087KB   | md5 ✘ | 36/48
+✅ liu673cn/box m.json 站点 234| .js  51 | csp_ 165 | fty.jar 669KB    | md5 ✔ | 146/165
+```
+
+⚠️ **数命中率别只看全局 `spider`**：站点可以自带 `sites[].jar`（liu673cn/box 的 234 站里 108 站自带），
+只按全局 `spec` 算会得到一堆**假缺失**。
+
+⚠️ **旧说法纠正**：2026-09-27 早些时候记的「那份 `classes.dex` 解不开（`Bad magic number`）」
+**是误判** —— `probe_config.py` 的 DEX 解析能正常读出类名（先跳 uleb128 再读字符串），
+所以现在能静态列出「缺哪些类」，不必逐个切过去试。
+
+## 3. 两个「换了配置也修不掉」的坑
+
+**(a) js 引擎库必须「自包含」** —— drpy 的 `drpy2.min.js` 顶部是一串 `import`。
+若它 import 一个**外部站点**而那个站点挂了，**这个引擎下的所有源一起初始化失败**：
+
+```
+E QuickJS: 模块编译失败：https://down.nigx.cn/qu.ax/cLFE.js
+E QuickJS: com.whl.quickjs.wrapper.QuickJSException: unexpected token in expression: '<'
+```
+
+（拉回来的是错误页 HTML，不是 JS。看着像宿主挂了，其实是源作者引了个死 CDN。）
+
+- qist `lib/drpy2.min.js` → 只 `import "./drpy-core-lite.min.js"`（同目录）✅
+- **gao `lib/drpy2.min.js` → `import "https://down.nigx.cn/qu.ax/*.js"`（403）❌
+  → gao/js.json 那 221 个 drpy 源全废、gao/0821 的 32 个也是**
+- gao/0821 另有 7 个源 import `notabug.org/fantaiying/ext/…`（404）❌
+- qist/0821 有 5 个源用 `gh-proxy.net/…fantaiying7/EXT/…`（429，时通时不通）⚠️
+- qist `lib/drpy.min.js`（老版）import `ghproxy.net/…hjdhnx/dr_py/…` ⚠️ 依赖第三方加速器
+
+**所以「站点 298 个 / 227 个 js 源」这种数字会严重误判，必须连 lib 一起看。**
+
+**(b) `spider.jar`（4.8MB dex）会让 App native 崩** —— 真机必现，**不是站点问题**：
+
+```
+ActivityManager: Process com.cycling.beevideo (pid 2204) has died: fg  TOP
+```
+- **无** Java `FATAL EXCEPTION`、**无** `am_crash`、**无** `am_anr`、crash buffer 空 → native 层。
+- 崩前最后日志是 favicon 无关的 JIT：`com.github.catvod.spider.XBPQ.A(String,String,boolean,HashMap)`。
+- 该 jar 结构是干净的（4 条目：`META-INF/ANDROID.{RSA,SF}`、`MANIFEST.MF`、`classes.dex` 4804980B），
+  **不是 fty 加固**，也没有 native 库 —— **根因待查**。
+- 对照：`fan.txt`（1087KB）与 `pg_upgraded.jar`（2843KB）都**正常**。
+- ⇒ **`dianshi.json` / `jsm.json` 的 103 个 `csp_` 源实际不可用**，别推荐（它们的 `.js` 源仍可用）。
+
+## 4. 真机验收（M2104K10AC，debug）
+
+| 配置 | 源 | 结果 |
+|---|---|---|
+| `ghfast.top/…/fty.json` | `糯米`（`csp_NmyswvGuard`，jar 源） | ✅ Hero「云雀叫天录」+ 5 分类 + **推荐 12 部** + 海报全出（`qist_fty_nuomi.png`）|
+| `ghfast.top/…/0825.json` | `追剧`（`csp_TTian`） | ✅ jar 加载 + 类执行成功（`TTian.homeContent` 被调到）；卡「正在读取…」是**源站 `app.kzjtv.com` 30s 连接超时**，非宿主问题 |
+| `cdn.jsdelivr.net/…/dianshi.json` | `fyyy`（`csp_XBPQ`） | ❌ **下载 jar 403**（jsdelivr）→ 换镜像前缀后 jar 能下，但**执行时 native 崩** |
+| `cdn.jsdelivr.net/…/gao/js.json` | `drpy_js_低端` | ❌ `unexpected token '<'`（引擎库 import 的 `down.nigx.cn` 403）|
+
+设备留下的状态：`config_url = ghfast.top/…/fty.json`，`active_source_id = 糯米`。
+
+## 5. 操作要点
+
+- 工具：`probe_config.py [URL 或关键词]` 体检；`install_debug.py --config <URL> <源key> --keep` 真机切换。
+- ⚠️ 判「是不是宿主坏了」要**分层看**：`下载 jar 失败` = 网络/镜像；`jar 里找不到类` = 配置 md5/类缺失；
+  `unexpected token '<'` = js 引擎库的外部依赖；**进程直接 died 无日志** = native 崩（宿主侧，得查）。
+
+## 6. 真机调试工具链（2026-09-27 补充）
+
+- ⚠️ **`adb shell uiautomator dump /sdcard/x.xml` 不能写在 Git Bash 里** —— Git Bash 把 `/sdcard/...`
+  改写成 `C:/Users/.../PortableGit/.../sdcard/...`，而 `adb shell` 退出码仍是 0，
+  表现得像「dump 成功但没内容」。**改成由 Python 直接调 adb**（`ui_dump.py` 就是这么做的）。
+  截图同理：`adb exec-out screencap -p > x.png`，**不能** `adb shell screencap -p /sdcard/...`。
+- `ui_dump.py`（已转正）：可靠地 dump + 列文本 + 可选截图。⚠️ dump 前先 `rm -f`（失败会留下上一份）；
+  截图走 bytes 通道（`text=True` 会把 PNG 解坏）。⚠️ **dump 完必须先删远端 xml**。
+- ⚠️ **屏外的项 bounds 全是 `[0,0][0,0]`** → `ui_tap.py` 会回退到整块滚动容器点上去，
+  什么都没发生也没日志（极易误判成「代码改坏了」）。**先 swipe 滚进可视区再 dump**。
+  Compose 语义叶子 bounds 也常是 `[0,0][0,0]` → 沿祖先链回溯。
+- ⚠️ `ui_tap.py` 两个已修 bug：① `--desc` 读的属性名是 `desc`，dump 里实际叫 **`content-desc`**；
+  ② 默认下标 0 会踩子串匹配（搜「嗅探播放」先命中「…只有一级链接直接嗅探播放」）
+  → 已改成**全等优先 + 有真实 bounds 优先**。
+- ⚠️ `logcat -d | grep` 全空 **≠ 没日志**：先 `adb logcat -G 16M` 把 buffer 放大。
+- ⚠️ **判定「源站挂了」不能只看宿主机**：宿主机那条链路常走代理（实测一个图片 URL 在宿主机
+  200 / 1MB，设备上取不到）。要判源站死活，得拿**设备**的实际表现说话。
+- 量缓存效果用 `_netwatch.py`（逐秒 RX + `du -sk` 缓存目录）；**只看网卡不够** ——
+  读内存和读磁盘在网络视角下一样，必须同时看缓存占用是否停滞。
+- ⚠️ **抓动画帧必须设备端连拍**（host `exec-out` 每帧 350–1300ms，加载窗口只有几百毫秒）：
+  连 `am start`/`input tap` 一起塞进设备端 `while…screencap…done` 并放后台。
+  ⚠️ 别按「色像素重心」定位移动元素 —— 浅色页面上列间隙更亮、会把重心吸走，要按精确颜色切段。
+- ⚠️ **验拖拽只能用「单次调用」的 `input swipe`**：`input motionevent` 每次调用都是独立进程，
+  `downTime` 对不上，孤立的 UP 会被合成为一次新 tap（本项目实测因此误判过一次「拖拽无效」）。
+- ⚠️ 验**进度条**拖拽时**别从轨道最左端起手** —— 实测落到了它下面的手势层、变成一次手势 seek。
+  画面中部的手势横滑才是「快进一个跨度」（= 时长 / 10）。
+- 排除崩溃的判据：`dumpsys activity activities` 里有 `mFocusedApp` 且 logcat 无 `FATAL`。
+
+## 7. CI / 发布流水线细节（2026-09-18 上线，2026-09-27 补充）
+
+仓库 = `github.com/mariamjensen42-glitch/BeeVideo`（**公开 + GPL-3.0**）。
+工作流 `.github/workflows/{ci,release}.yml`；本地校验器 `.workbuddy/scripts/lint_workflows.py`
+（YAML 结构 + 把每个 run 块抠出来喂 `bash -n`；pyyaml 在 `~/.workbuddy/binaries/python/envs/default`）。
+
+- ⚠️ **R8 差分校验不需要签名** —— 未签名 release APK 接口面完整，照样能差分。所以它放在
+  **CI（每次 push/PR）**而不是只有发版才跑：让「proguard 规则被误删」在 PR 上就红。
+  ⚠️ 但 CI 上**必须传 `--allow-unsigned`**：公开仓库的 PR 流水线不能拿签名密钥，
+  产出的包必然未签名，不传就每次红在一个与本次改动无关的假警报上。
+- ⚠️ tag 过滤必须写 **`v[0-9]*` 而不是 `v*`** —— `vendor-js-v1` 也以 v 开头，
+  写 `v*` 会在建 vendor 资产时误触发一次正式发布。
+- 第三方 JS 运行库（cat.js / cheerio.min.js / crypto-js.js / gbk.js）不进库，
+  存在 release tag **`vendor-js-v1`** 里；release.yml 构建前拉取，**拉不到即 fail**
+  （缺库的 APK 构建时不报错，直到用户打开 `.js` 源才炸）。
+  ⚠️ `.gitignore` 里**只能逐个文件列**，写 `js/lib/**` 会连 `http.js`/`spider.js`/`similarity.js`
+  一起排掉 —— 那三个是本项目自己的代码。
+- ⚠️ `gradlew` 在 git 里曾是 **100644**（无执行位）；已 `git update-index --chmod=+x`。
+- ⚠️ compileSdk 37.1 的 SDK 包名是 **`platforms;android-37.1`**，写 `android-37` 会
+  「Failed to find target with hash string」。
+- 版本号靠 `-Pbeevideo.versionName/-Pbeevideo.versionCode` 注入（不传＝原值）。
+- ⚠️ 本机 `git push` 会命中 **`git config` 里写死的 `http.proxy=127.0.0.1:10809`**（常是死的）；
+  当前可用代理在环境变量 `http_proxy` 里 → 用 `git -c http.proxy=$http_proxy push` 绕过。
+- ⚠️ CI 上**别抄** `--no-daemon --max-workers=1`，那是本机沙箱的绕行。
+- ⚠️ 本机裸 `bash` 会命中 WSL 转发器、被安全策略拦 → 脚本里用 Git 的 bash 全路径。
+
+## 8. 现状快照 · 设计稿 · 启动图标（2026-09-27 迁自 `MEMORY.md`）
+
+### 8.1 已验（debug 真机）
+
+- 配置源：type=1 / 0 / 3、HTTPS 播放、Py 显式拒绝、`ext` 四形态；jar ABI。
+- 本地代理 + 糯米两线路**真实播放**、磁盘缓存冷/热 A/B、骨架屏（浅/深两主题）。
+- **`.js` 源端到端**（`聚合┃网易公版[js]`：首页 → 详情 → 真出画面 → 跨源搜索 13 部）。
+- 站点弹层全流程（顶栏 `▾` → 搜 → 点选 → 顶栏更新）；**jar 源端到端**（`fty.json` + 糯米，首页 12 部海报全出）。
+- 设置页**预置配置一键切换**（ADR-0008）。
+- **单测 225 全绿**（基线 89）。已修：vodId 带 `/` 点详情闪退；`invalid port: -1`；代理地址被判 progressive。
+- 性能基线（糯米实拍）：首帧 ~3.7s；稳态 771 KB/s ≈ 45 MB/分钟；**媒体分片不过本地代理**。
+
+### 8.2 未验
+
+- ⚠️ **release 包从没装到真机跑过**（换装要卸载、会丢已配的源）。
+- `ThemeMode{SYSTEM,LIGHT,DARK}`、设置页那行的「更换」按钮（`SourcePickerSheet` 另一个入口）、
+  站点网格换行后的形状、启动图标桌面实拍。
+
+### 8.3 术语债
+
+`CONTEXT.md` 说「内容源（那份配置）/ 站点（配置里的一项）」，UI 写「当前来源」，代码类型叫
+`ContentSource`，高城口头说「视频源」—— 三个名字两个概念。真要改得把 `VodContentRepository`
+里那几处中文串一起搬进资源（数据层现在有中文界面串，与「数据层一个中文界面串都没有」矛盾）。
+
+### 8.4 设计稿（Ardot）
+
+文件 `https://ardot.tencent.com/file/726060122657066`。
+
+- 第一版：M3 Expressive 五屏（393×852dp，首页/详情/播放/收藏空态/设置），只做了深色 → `docs/design/0X-*.png`。
+- 第二版（2026-09-16）：Wayfare 风格（暖白底 + 黑描边 + 黄/蓝高饱和）五屏。
+- ⚠️ 两套互斥：Wayfare 要"平面 + 硬描边"，M3 要"tonal surface + 官方角色色"。
+  落地前**必须让高城拍板**，别默默改 `BeeTokens`。
+- Ardot 画布踩坑（`C()` 覆写、SVG transform、`clipsContent`、z 序靠插入顺序等 7 条）见本文「设计稿（Ardot 画布，非代码）」节。
+
+### 8.5 启动图标（2026-09-27 落地）
+
+`drawable/ic_launcher_{background,foreground,monochrome}.xml` + `mipmap-anydpi/` 两个 adaptive-icon。
+
+- ⚠️ `mipmap-*dpi/*.webp` **已删，别再补回**（minSdk 31 一律走 anydpi）。
+- ⚠️ `<monochrome>` 指向**单色版**，别改回复用彩色 foreground。
+- 几何：108dp viewport；平顶朝上六边形，中心 (54,54)，外接圆 **r=33**（落在 72dp 安全区内，
+  逼近 66dp 严格区上限）；每个角用二次贝塞尔倒 **5.5** 圆角。播放三角中心 **(55.5, 54)**
+  （右移 1.5 做光学补偿）、半高 15.5 / 宽 27 / 角半径 4.5，与六边形**合并在同一条 path**
+  里用 `android:fillType="evenOdd"` 挖空。
+- 配色：背景对角渐变 `#FFD149 → #F08C00`（`aapt:attr` 内联，颜色**必须带 alpha**），前景 `#1B1A17`。
+- 预览走 `.workbuddy/scripts/render_icon.py`（Pillow 复刻几何），产出 `docs/design/icon-preview.png`。
+
