@@ -1,8 +1,10 @@
 package com.cycling.beevideo.ui.player
 
-import com.cycling.beevideo.domain.model.PlayTarget
+import com.cycling.beevideo.domain.model.Episode
+import com.cycling.beevideo.domain.model.PlayLine
 import com.cycling.beevideo.domain.model.PlaybackState
 import com.cycling.beevideo.domain.model.Vod
+import com.cycling.beevideo.ui.preview.FakeContentRepository
 import com.cycling.beevideo.ui.preview.FakeLibraryRepository
 import com.cycling.beevideo.ui.preview.FakePlaybackSession
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,20 +17,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 播放页状态持有者的**策略**：什么时候上报进度。
+ * 播放策略持有者的行为钉子：什么时候上报进度、换集前落的是什么、播完接不接下一集。
  *
  * 这一层以前住在 813 行的 composable 里，只能靠真机一集一集试 ——
  * "切集前先落库"这种顺序判据写错了的表现是"进度偶尔倒退"，看日志看不出来。
- * 拆出假会话之后，三件事第一次能被钉住：上报**时机**、上报时用的是**哪一刻**的
- * 位置、以及收场时**有没有**关掉会话。
  *
- * ─── 为什么不需要 `Dispatchers.setMain` ────────────────────────────────
- * 持有者**不是** ViewModel，周期上报的作用域由外面给。所以这里直接把
- * `TestScope.backgroundScope` 交给它：虚拟时间归 `runTest` 管，
- * 而 `backgroundScope` 会在用例结束时被自动取消 —— 那个
- * `while (isActive) delay(…)` 的无限循环因此不会把调度器拖住。
- * （这正是把作用域做成参数的收益：换成 `viewModelScope` 就得替换 Main 调度器，
- * 而且无限循环会让 `runTest` 一直推进虚拟时间直到整轮测试超时。）
+ * 起播（[PlayerPlaybackState.ensurePlaying]）要走一次"取播放目标"的网络往返，
+ * 在虚拟时间下用 `runCurrent()` 推一步就到。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlayerPlaybackStateTest {
@@ -37,12 +32,10 @@ class PlayerPlaybackStateTest {
     fun `正在播放时按间隔上报，且不强制`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library)
+        val holder = playedHolder(session, library)
 
-        holder.open(TARGET, resumeAtMs = 0L)
         session.currentPositionMs = 30_000L
         session.currentDurationMs = 60_000L
-
         advanceTimeBy(1_001)
 
         val saved = library.savedProgress.single()
@@ -56,9 +49,8 @@ class PlayerPlaybackStateTest {
     fun `暂停时不上报`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library)
+        val holder = playedHolder(session, library)
 
-        holder.open(TARGET, resumeAtMs = 0L)
         session.currentPositionMs = 30_000L
         session.emit(PlaybackState.Paused)
 
@@ -71,13 +63,29 @@ class PlayerPlaybackStateTest {
     fun `还没起播时位置为 0，不写库`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        holder(session, library)
+        val holder = holder(session, library)
+        holder.bind(VOD)
 
         // 状态是"在播"，但位置还是 0 —— 这一条专门测位置守卫，不靠状态挡
         session.emit(PlaybackState.Playing)
         advanceTimeBy(2_001)
 
         assertTrue("位置为 0 表示还没起播，没有可记的东西", library.savedProgress.isEmpty())
+    }
+
+    /** 同一集重复调 ensurePlaying 必须是空操作：页面每次重组都会想调它，重放就是黑屏归零。 */
+    @Test
+    fun `同一集重复起播不重放`() = runTest {
+        val session = FakePlaybackSession()
+        val holder = holder(session)
+        holder.bind(VOD)
+
+        holder.ensurePlaying()
+        runCurrent()
+        holder.ensurePlaying()
+        runCurrent()
+
+        assertEquals(1, session.opens.size)
     }
 
     /**
@@ -88,9 +96,7 @@ class PlayerPlaybackStateTest {
     fun `切集前先用旧集号强制落一次进度`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, initialEpisodeIndex = 2)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 03 集")
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library, initialEpisodeIndex = 2)
         session.currentPositionMs = 12_000L
 
         holder.selectEpisode(3)
@@ -107,8 +113,7 @@ class PlayerPlaybackStateTest {
     fun `退到后台强制落一次`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library)
         session.currentPositionMs = 5_000L
 
         holder.onStop()
@@ -117,17 +122,35 @@ class PlayerPlaybackStateTest {
     }
 
     /**
+     * 离开播放页的收场：落进度 + 暂停，但**不退役**。
+     *
+     * `release` 在这里是错的：会话是 App 级的，用户从桌面点回来还得接着看。
+     */
+    @Test
+    fun `离开播放页时暂停并落进度，但不关闭会话`() = runTest {
+        val session = FakePlaybackSession()
+        val library = FakeLibraryRepository()
+        val holder = playedHolder(session, library)
+        session.currentPositionMs = 8_000L
+
+        holder.pauseAndSave()
+
+        assertEquals(8_000L, library.savedProgress.single().progress.positionMs)
+        assertTrue(library.savedProgress.single().force)
+        assertEquals(1, session.pauseCount)
+        assertEquals("只暂停，不释放内核", 0, session.closeCount)
+    }
+
+    /**
      * 换线路也是**先落库再切**，而且比切集更要紧：进度记录带的是**线路名**，
-     * 而线路名是重组之后才由 `bindContext` 推过来的。顺序反了的话，刚看的那 12 分钟
-     * 会被记到新线路名下 —— 那条记录随后就成了新线路的续播点，等于凭空空降一个进度。
+     * 而线路名来自当前线路。顺序反了的话，刚看的那 12 分钟会被记到新线路名下 ——
+     * 那条记录随后就成了新线路的续播点，等于凭空空降一个进度。
      */
     @Test
     fun `换线路前先用旧线路名强制落一次进度`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, initialLineIndex = 0)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 03 集")
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library, initialLineIndex = 0)
         session.currentPositionMs = 12_000L
 
         holder.selectLine(1)
@@ -139,10 +162,11 @@ class PlayerPlaybackStateTest {
         assertEquals(1, holder.lineIndex)
     }
 
-    /** 集号不跟着线路走：第 3 集换条线路还是第 3 集，越界交给 `onEpisodesChanged` 夹。 */
+    /** 集号不跟着线路走：第 4 集换到更长的线路还是第 4 集。 */
     @Test
     fun `换线路不动集号`() = runTest {
-        val holder = holder(initialEpisodeIndex = 3)
+        val holder = holder(initialEpisodeIndex = 3, initialLineIndex = 1)
+        holder.bind(VOD)
 
         holder.selectLine(2)
 
@@ -150,26 +174,35 @@ class PlayerPlaybackStateTest {
         assertEquals(2, holder.lineIndex)
     }
 
+    /** 换到**更短**的线路时集号得跟着夹，否则落库的就是一条指向不存在剧集的进度。 */
+    @Test
+    fun `换到更短的线路时集号被夹取`() = runTest {
+        val holder = holder(initialEpisodeIndex = 4, initialLineIndex = 1)
+        holder.bind(VOD)
+
+        holder.selectLine(0)
+
+        assertEquals("线路一只有 3 集", 2, holder.episodeIndex)
+    }
+
     /**
      * 集号在持有者里夹取，而不是在界面里：界面夹取的话持有者记账用的还是越界那个，
      * 落进库里的就是一条指向不存在剧集的进度。
      */
     @Test
-    fun `剧集变少时集号被夹取`() = runTest {
+    fun `详情就绪时越界集号被夹取`() = runTest {
         val holder = holder(initialEpisodeIndex = 11)
 
-        holder.onEpisodesChanged(count = 6)
+        holder.bind(VOD)
 
-        assertEquals(5, holder.episodeIndex)
+        assertEquals("线路一只有 3 集", 2, holder.episodeIndex)
     }
 
     @Test
     fun `收场时先落进度再关闭会话`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 01 集")
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library)
         session.currentPositionMs = 8_000L
 
         holder.release()
@@ -177,6 +210,84 @@ class PlayerPlaybackStateTest {
         assertEquals(8_000L, library.savedProgress.single().progress.positionMs)
         assertTrue(library.savedProgress.single().force)
         assertEquals("收场必须释放内核，否则 ExoPlayer 会一直握着解码器", 1, session.closeCount)
+    }
+
+    // -------------------------------------------------------- 路由起点
+
+    /**
+     * 从详情页点「第 05 集」进来，而持有者还停在上一集的第 03 集 —— 必须跳过去。
+     *
+     * 这条盯的是"同一部片复用持有者时路由参数被吃掉"：复用是为了重进页面不重放，
+     * 但它顺带把"用户明确点了一集"也一起吞了。
+     */
+    @Test
+    fun `路由起点与当前不同时切过去`() = runTest {
+        val session = FakePlaybackSession()
+        val holder = playedHolder(session, initialEpisodeIndex = 2)
+
+        holder.applyRoute(lineIndex = 0, episodeIndex = 1)
+        runCurrent()
+
+        assertEquals(1, holder.episodeIndex)
+        assertEquals("换集就该重新兑换一次地址", 2, session.opens.size)
+    }
+
+    @Test
+    fun `路由起点带线路号时一起切`() = runTest {
+        val session = FakePlaybackSession()
+        val holder = playedHolder(session, initialEpisodeIndex = 0, initialLineIndex = 0)
+
+        holder.applyRoute(lineIndex = 1, episodeIndex = 3)
+        runCurrent()
+
+        assertEquals(1, holder.lineIndex)
+        assertEquals(3, holder.episodeIndex)
+    }
+
+    /**
+     * 路由起点就是持有者当前那一集时**一个动作都不该有**。
+     *
+     * 每次进页面都会调一次（`LaunchedEffect` 的键含路由参数），把空操作做成了切换的后果是
+     * "返回再进来，进度被从 12 分钟拨回 0 重放"。
+     */
+    @Test
+    fun `路由起点与当前相同时什么都不做`() = runTest {
+        val session = FakePlaybackSession()
+        val library = FakeLibraryRepository()
+        val holder = playedHolder(session, library, initialEpisodeIndex = 1)
+        session.currentPositionMs = 12_000L
+
+        holder.applyRoute(lineIndex = 0, episodeIndex = 1)
+        runCurrent()
+
+        assertTrue("位置没变就不该有落库", library.savedProgress.isEmpty())
+        assertEquals("也不该重新起播", 1, session.opens.size)
+    }
+
+    /** 切之前先把旧那一集的位置落下来，理由同 `selectEpisode`。 */
+    @Test
+    fun `路由切换前先落旧进度`() = runTest {
+        val session = FakePlaybackSession()
+        val library = FakeLibraryRepository()
+        val holder = playedHolder(session, library, initialEpisodeIndex = 2)
+        session.currentPositionMs = 12_000L
+
+        holder.applyRoute(lineIndex = 0, episodeIndex = 1)
+
+        val saved = library.savedProgress.single()
+        assertEquals("记的必须是刚刚在看的那一集", 2, saved.progress.episodeIndex)
+        assertTrue(saved.force)
+    }
+
+    /** 路由带来的集号越界（来源换了、剧集变短）要在持有者里夹，界面夹的话落库的仍是越界号。 */
+    @Test
+    fun `路由起点越界时被夹取`() = runTest {
+        val holder = holder(initialEpisodeIndex = 0)
+        holder.bind(VOD)
+
+        holder.applyRoute(lineIndex = 0, episodeIndex = 9)
+
+        assertEquals("线路一只有 3 集", 2, holder.episodeIndex)
     }
 
     // -------------------------------------------------------- 播放期控件
@@ -189,8 +300,7 @@ class PlayerPlaybackStateTest {
     fun `进度快照按 tick 刷新，比上报密`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library)
         session.currentPositionMs = 42_000L
         session.currentDurationMs = 90_000L
 
@@ -204,8 +314,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `拖进度条立刻改快照，且只向前端发一次 seek`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session)
 
         holder.seekTo(120_000L)
 
@@ -220,8 +329,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `改倍速同时更新快照与会话`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session)
 
         holder.selectSpeed(1.5f)
 
@@ -241,8 +349,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `播放暂停透传到会话`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session)
 
         holder.togglePlayPause()
 
@@ -252,8 +359,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `收场后不再刷新快照`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session)
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session)
         session.currentPositionMs = 10_000L
         advanceTimeBy(251)
         assertEquals(10_000L, holder.positionMs)
@@ -275,10 +381,7 @@ class PlayerPlaybackStateTest {
     fun `一集播完自动接下一集并先落进度`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, initialEpisodeIndex = 0)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 01 集")
-        holder.open(TARGET, resumeAtMs = 0L)
-        holder.onEpisodesChanged(count = 3)
+        val holder = playedHolder(session, library, initialEpisodeIndex = 0)
         session.currentPositionMs = 100_000L
 
         session.emit(PlaybackState.Ended)
@@ -300,9 +403,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `跳完之后不会继续往前跳`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session, initialEpisodeIndex = 0)
-        holder.open(TARGET, resumeAtMs = 0L)
-        holder.onEpisodesChanged(count = 5)
+        val holder = playedHolder(session, initialEpisodeIndex = 0)
 
         session.emit(PlaybackState.Ended)
         runCurrent()
@@ -317,9 +418,7 @@ class PlayerPlaybackStateTest {
     @Test
     fun `起播下一集后能继续连播`() = runTest {
         val session = FakePlaybackSession()
-        val holder = holder(session, initialEpisodeIndex = 0)
-        holder.open(TARGET, resumeAtMs = 0L)
-        holder.onEpisodesChanged(count = 5)
+        val holder = playedHolder(session, initialEpisodeIndex = 0)
 
         session.emit(PlaybackState.Ended)
         runCurrent()
@@ -335,10 +434,7 @@ class PlayerPlaybackStateTest {
     fun `最后一集播完不跳，但仍落一次进度`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, initialEpisodeIndex = 2)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 03 集")
-        holder.open(TARGET, resumeAtMs = 0L)
-        holder.onEpisodesChanged(count = 3)
+        val holder = playedHolder(session, library, initialEpisodeIndex = 2)
         session.currentPositionMs = 88_000L
 
         session.emit(PlaybackState.Ended)
@@ -356,10 +452,7 @@ class PlayerPlaybackStateTest {
     fun `关掉连播时播完不动`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, autoPlayNext = false)
-        holder.bindContext(vod = VOD, lineName = "线路一", episodeName = "第 01 集")
-        holder.open(TARGET, resumeAtMs = 0L)
-        holder.onEpisodesChanged(count = 5)
+        val holder = playedHolder(session, library, autoPlayNext = false)
         session.currentPositionMs = 60_000L
 
         session.emit(PlaybackState.Ended)
@@ -381,19 +474,34 @@ class PlayerPlaybackStateTest {
     fun `进度里带上线路号与影片快照`() = runTest {
         val session = FakePlaybackSession()
         val library = FakeLibraryRepository()
-        val holder = holder(session, library, initialLineIndex = 1)
-        holder.bindContext(vod = VOD, lineName = "线路二", episodeName = "第 03 集")
-        holder.open(TARGET, resumeAtMs = 0L)
+        val holder = playedHolder(session, library, initialLineIndex = 1)
         session.currentPositionMs = 12_000L
 
         holder.save(force = true)
 
         val saved = library.savedProgress.single().progress
         assertEquals(1, saved.lineIndex)
+        assertEquals("线路二", saved.lineName)
+        assertEquals("第 01 集", saved.episodeName)
         assertEquals(VOD.name, saved.name)
         assertEquals(VOD.pic, saved.pic)
         assertEquals(VOD.score, saved.score)
         assertEquals(VOD.remarks, saved.remarks)
+    }
+
+    /** 起播后（详情已 bind、目标已兑换）的持有者，模拟"页面已经放起来了"的常态。 */
+    private fun TestScope.playedHolder(
+        session: FakePlaybackSession = FakePlaybackSession(),
+        library: FakeLibraryRepository = FakeLibraryRepository(),
+        initialEpisodeIndex: Int = 0,
+        initialLineIndex: Int = 0,
+        autoPlayNext: Boolean = true,
+    ): PlayerPlaybackState = holder(
+        session, library, initialEpisodeIndex, initialLineIndex, autoPlayNext,
+    ).also {
+        it.bind(VOD)
+        it.ensurePlaying()
+        runCurrent()
     }
 
     private fun TestScope.holder(
@@ -403,14 +511,15 @@ class PlayerPlaybackStateTest {
         initialLineIndex: Int = 0,
         autoPlayNext: Boolean = true,
     ) = PlayerPlaybackState(
-        session = session,
-        library = library,
         vodId = VOD_ID,
+        session = session,
+        content = FakeContentRepository(),
+        library = library,
         initialEpisodeIndex = initialEpisodeIndex,
         initialLineIndex = initialLineIndex,
         autoPlayNext = autoPlayNext,
         // backgroundScope：用例结束时由 runTest 自动取消，无限上报循环不会拖住调度器
-        scope = backgroundScope,
+        parentScope = backgroundScope,
         now = { FIXED_NOW },
     )
 
@@ -418,9 +527,7 @@ class PlayerPlaybackStateTest {
         const val VOD_ID = "site:v01"
         const val FIXED_NOW = 1_700_000_000_000L
 
-        val TARGET = PlayTarget(url = "https://example.com/ep01.m3u8", headers = emptyMap())
-
-        /** 只用来验"快照被原样搬进进度"，字段值是随便取的，但都非空 —— 空值会让断言形同虚设。 */
+        /** 三条线路长短不一（3 / 5 / 6），换线路与夹取的用例都靠这个不等长。 */
         val VOD = Vod(
             id = VOD_ID,
             name = "长风渡海",
@@ -434,7 +541,19 @@ class PlayerPlaybackStateTest {
             actors = "——",
             intro = "——",
             pic = "https://example.com/poster.jpg",
-            lines = emptyList(),
+            lines = listOf(
+                PlayLine("线路一", episodes(3)),
+                PlayLine("线路二", episodes(5)),
+                PlayLine("线路三", episodes(6)),
+            ),
         )
+
+        fun episodes(count: Int): List<Episode> = (1..count).map { i ->
+            Episode(
+                name = "第 %02d 集".format(i),
+                short = "%02d".format(i),
+                url = "https://example.com/ep$i.m3u8",
+            )
+        }
     }
 }
