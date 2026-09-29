@@ -33,7 +33,6 @@ import com.cycling.beevideo.ui.components.BeePosterImage
 import com.cycling.beevideo.ui.components.ContainmentBlock
 import com.cycling.beevideo.ui.components.metaLine
 import com.cycling.beevideo.ui.components.posterBrush
-import com.cycling.beevideo.ui.theme.BeeBrandFont
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeMotion
 import com.cycling.beevideo.ui.theme.MotionSpeed
@@ -132,9 +131,7 @@ private fun HistoryRowContent(
                 Text(
                     text = title,
                     color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleMediumEmphasized.copy(
-                        fontFamily = BeeBrandFont,
-                    ),
+                    style = MaterialTheme.typography.titleMediumEmphasized,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

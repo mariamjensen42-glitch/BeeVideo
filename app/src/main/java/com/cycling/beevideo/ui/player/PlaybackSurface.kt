@@ -11,9 +11,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import com.cycling.beevideo.domain.repository.PlaybackSession
-import com.cycling.beevideo.player.Media3PlaybackSession
+import com.cycling.beevideo.player.MediaControllerPlaybackSession
 
 /**
  * 画面槽：把会话接到 Media3 的 PlayerView 上。
@@ -29,7 +30,14 @@ internal fun PlaybackSurface(
     modifier: Modifier,
     overlay: @Composable BoxScope.() -> Unit,
 ) {
-    val player = (session as? Media3PlaybackSession)?.player ?: return
+    // 控制器连接是异步的，没连上就先空着 —— MediaController 本身就是 Player，
+    // 连上那一刻这条流发出值，PlayerView 才绑得上
+    val player = (session as? MediaControllerPlaybackSession)
+        ?.playerFlow
+        ?.collectAsStateWithLifecycle()
+        ?.value
+        ?: return
+
     Box(modifier) {
         AndroidView(
             factory = { ctx ->
@@ -42,6 +50,7 @@ internal fun PlaybackSurface(
                     )
                 }
             },
+            update = { it.player = player },
             modifier = Modifier.fillMaxSize(),
         )
         if (isBuffering) {

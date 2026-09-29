@@ -1,6 +1,6 @@
 package com.cycling.beevideo.domain.repository
 
-import com.cycling.beevideo.domain.model.PlayTarget
+import com.cycling.beevideo.domain.model.PlayRequest
 import com.cycling.beevideo.domain.model.PlaybackState
 import kotlinx.coroutines.flow.StateFlow
 
@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
  * 「会话」是关键 —— 实现活得不比宿主短，界面重建不打断它。
  *
  * 这条 seam 让内核形状的知识（位置 / 时长 / Listener / release 顺序）不再漏在界面里，
- * `Media3PlaybackSession` 是 adapter，将来换内核只需再写一个。
+ * `MediaControllerPlaybackSession` 是 adapter，将来换内核只需再写一个。
  *
  * 职责划分：**会话**管内核事实；**宿主**管策略（什么时候上报进度）；
  * **进度仓储**管节流（多久落一次库）。
@@ -22,9 +22,9 @@ interface PlaybackSession {
      * 起播一个播放目标；已载入时等于换集。
      *
      * **不抛异常**：起不来一律转成 [PlaybackState.Failed]；
-     * [PlayTarget.parse] 为真时不交给内核。
+     * [com.cycling.beevideo.domain.model.PlayTarget.parse] 为真时不交给内核。
      */
-    fun open(target: PlayTarget, resumeAtMs: Long)
+    fun open(request: PlayRequest)
 
     /**
      * 当前播放位置（毫秒）。
@@ -44,6 +44,13 @@ interface PlaybackSession {
      * "暂停后又进了一次缓冲"（该播），界面按 state 反推必错一半。
      */
     fun togglePlayPause()
+
+    /**
+     * 明确暂停。**不是 toggle 的另一种写法** —— 调用方要的是"停下来"，
+     * 而它往往发生在用户已经不看画面的时候（离开播放页又进不了小窗），
+     * 那时状态是什么没人知道，翻转一下有可能把它翻成"继续放"。
+     */
+    fun pause()
 
     /** ⚠️ 拖拽中不要每帧调（HLS 每次都要重新定位分片），松手时调一次。 */
     fun seekTo(positionMs: Long)

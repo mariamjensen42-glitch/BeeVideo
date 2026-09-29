@@ -10,7 +10,7 @@ package com.cycling.beevideo.domain.repository
  *
  * 所以分工是：
  *   - **控制面**（本接口）：设置页要的"用了多少 / 清掉"，与内核无关，可测；
- *   - **取实例**：播放会话的装配点自己做（见 `Media3PlaybackSession` 的 `cache` 参数）。
+ *   - **取实例**：播放会话的装配点自己做（见 `PlaybackService` 里 `MediaCacheProvider.get` 的调用点）。
  *
  * 加这个接口的直接理由：在那之前 `SettingsScreen` 必须
  * `import com.cycling.beevideo.player.MediaCacheProvider` 才能显示"已用 xx MB" ——

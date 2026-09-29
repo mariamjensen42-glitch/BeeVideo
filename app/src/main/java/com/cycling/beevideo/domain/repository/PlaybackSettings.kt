@@ -1,5 +1,8 @@
 package com.cycling.beevideo.domain.repository
 
+import com.cycling.beevideo.domain.model.DecoderPreference
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * 播放相关的用户设置。
  *
@@ -30,6 +33,36 @@ interface PlaybackSettings {
      * ⚠️ 判定属于播放页（`autoNextEpisode`），这里只存值。
      */
     var autoPlayNext: Boolean
+
+    /**
+     * 解码器偏好。它在**每次选解码器时**被读（不是建播放器时定死），所以改完
+     * 重新起播就生效，不用重启。
+     */
+    var decoderPreference: DecoderPreference
+
+    /**
+     * 退出播放页要不要**继续放**（画面转到应用内小窗；按 Home 还会缩成系统小窗）。默认**关**。
+     *
+     * 关着的那档就是"退出播放页 = 停止播放"，最好解释、也最不容易让人困惑；
+     * 开着才有小窗。判定在 `PlayerPip.shouldAutoEnterPip` 与 `MiniPlayer`，这里只存值。
+     *
+     * ⚠️ 它是**唯一**做成 Flow 的一项。别项（缓存配额、请求头、连播）的改动都在
+     * "下次起播 / 下次进页面"被读到，够了；只有它必须**当场**生效 ——
+     * 播放页与迷你窗都挂着一个"退到后台自动进系统小窗"的开关，设置页拨完
+     * 不重新进页面也得跟着变，否则症状就是"开关关了，小窗还在"。
+     */
+    val pictureInPicture: StateFlow<Boolean>
+
+    fun setPictureInPicture(enabled: Boolean)
+
+    /**
+     * 自定义请求头的**原文**（每行一条 `名称: 值`）。
+     *
+     * ⚠️ 存原文而不是解析结果：解析不了的行必须能原样还给用户看，落成 Map 就是
+     * 静默丢数据。解析在 `parseCustomHeaders`，合并规则在 `withCustomHeaders`；
+     * 合并后的头只作用于**媒体**（`PlayTarget.headers` 的兜底），不动站点接口请求。
+     */
+    var customHeaderText: String
 
     companion object {
         const val GB = 1024L * 1024L * 1024L

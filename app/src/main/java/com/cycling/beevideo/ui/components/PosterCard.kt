@@ -38,7 +38,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.cycling.beevideo.domain.model.Vod
 import com.cycling.beevideo.ui.preview.PreviewVods
-import com.cycling.beevideo.ui.theme.BeeBrandFont
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeMotion
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
@@ -276,9 +275,7 @@ private fun PosterCardContent(
             Text(
                 text = name,
                 color = PosterTextPrimary,
-                style = MaterialTheme.typography.titleMediumEmphasized.copy(
-                    fontFamily = BeeBrandFont,
-                ),
+                style = MaterialTheme.typography.titleMediumEmphasized,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )

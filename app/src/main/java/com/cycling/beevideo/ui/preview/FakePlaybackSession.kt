@@ -1,6 +1,6 @@
 package com.cycling.beevideo.ui.preview
 
-import com.cycling.beevideo.domain.model.PlayTarget
+import com.cycling.beevideo.domain.model.PlayRequest
 import com.cycling.beevideo.domain.model.PlaybackState
 import com.cycling.beevideo.domain.repository.PlaybackSession
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,15 +33,18 @@ class FakePlaybackSession : PlaybackSession {
     var closeCount = 0
         private set
 
-    data class OpenCall(val target: PlayTarget, val resumeAtMs: Long)
+    data class OpenCall(val request: PlayRequest) {
+        val target get() = request.target
+        val resumeAtMs get() = request.resumeAtMs
+    }
 
     override fun positionMs(): Long = currentPositionMs
 
     override fun durationMs(): Long = currentDurationMs
 
-    override fun open(target: PlayTarget, resumeAtMs: Long) {
-        opens += OpenCall(target, resumeAtMs)
-        currentPositionMs = resumeAtMs
+    override fun open(request: PlayRequest) {
+        opens += OpenCall(request)
+        currentPositionMs = request.resumeAtMs
         _state.value = PlaybackState.Playing
     }
 
@@ -71,6 +74,14 @@ class FakePlaybackSession : PlaybackSession {
         _state.value =
             if (_state.value == PlaybackState.Playing) PlaybackState.Paused
             else PlaybackState.Playing
+    }
+
+    var pauseCount = 0
+        private set
+
+    override fun pause() {
+        pauseCount++
+        _state.value = PlaybackState.Paused
     }
 
     override fun seekTo(positionMs: Long) {

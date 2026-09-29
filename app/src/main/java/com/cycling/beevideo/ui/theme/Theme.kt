@@ -11,7 +11,6 @@ import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import com.cycling.beevideo.domain.model.ThemeMode
@@ -29,37 +28,8 @@ private val BeeShapes = Shapes(
     extraExtraLarge = RoundedCornerShape(48.dp),
 )
 
-/**
- * 品牌字体槽（M3 的 Brand = display + headline 两档）。衬线在设备上解析到
- * NotoSerifCJK，中文真出宋体字形，不是静默回退。
- *
- * ⚠️ 只换字体族，**绝不动 size**（M3：Avoid changing type size）。
- * 用法只能是 `style.copy(fontFamily = BeeBrandFont)`。
- *
- * `titleLarge` 也归 brand：`MediumFlexibleTopAppBar` 展开取 headlineMedium、收起取
- * titleLarge，而 `TextStyle.lerp` 对不同字体族不插值，两端同族才不会折叠过半时硬跳。
- */
-internal val BeeBrandFont = FontFamily.Serif
-
-private fun Typography.withBrandFont(): Typography = copy(
-    displayLarge = displayLarge.copy(fontFamily = BeeBrandFont),
-    displayMedium = displayMedium.copy(fontFamily = BeeBrandFont),
-    displaySmall = displaySmall.copy(fontFamily = BeeBrandFont),
-    displayLargeEmphasized = displayLargeEmphasized.copy(fontFamily = BeeBrandFont),
-    displayMediumEmphasized = displayMediumEmphasized.copy(fontFamily = BeeBrandFont),
-    displaySmallEmphasized = displaySmallEmphasized.copy(fontFamily = BeeBrandFont),
-    headlineLarge = headlineLarge.copy(fontFamily = BeeBrandFont),
-    headlineMedium = headlineMedium.copy(fontFamily = BeeBrandFont),
-    headlineSmall = headlineSmall.copy(fontFamily = BeeBrandFont),
-    headlineLargeEmphasized = headlineLargeEmphasized.copy(fontFamily = BeeBrandFont),
-    headlineMediumEmphasized = headlineMediumEmphasized.copy(fontFamily = BeeBrandFont),
-    headlineSmallEmphasized = headlineSmallEmphasized.copy(fontFamily = BeeBrandFont),
-    titleLarge = titleLarge.copy(fontFamily = BeeBrandFont),
-    titleLargeEmphasized = titleLargeEmphasized.copy(fontFamily = BeeBrandFont),
-)
-
-/** 官方刻度 + 品牌字体槽。alpha28 已公开全部 15 个 `*Emphasized` 角色，不用手抄基准。 */
-private val BeeTypography: Typography = Typography().withBrandFont()
+/** 官方默认刻度，不做任何字体族替换 —— 全 App 只有一个字体（系统默认）。 */
+private val BeeTypography: Typography = Typography()
 
 private val BeeMotionScheme = MotionScheme.expressive()
 

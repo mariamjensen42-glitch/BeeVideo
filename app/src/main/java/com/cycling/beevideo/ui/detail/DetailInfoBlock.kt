@@ -26,7 +26,6 @@ import com.cycling.beevideo.ui.components.ContainmentBlock
 import com.cycling.beevideo.ui.components.ScoreBadge
 import com.cycling.beevideo.ui.components.metaLine
 import com.cycling.beevideo.ui.components.posterBrush
-import com.cycling.beevideo.ui.theme.BeeBrandFont
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.PosterScrim
 import com.cycling.beevideo.ui.theme.PosterTextPrimary
@@ -60,9 +59,7 @@ internal fun DetailInfoBlock(vod: Vod) {
                 Text(
                     text = vod.name,
                     color = PosterTextPrimary,
-                    style = MaterialTheme.typography.titleMediumEmphasized.copy(
-                        fontFamily = BeeBrandFont,
-                    ),
+                    style = MaterialTheme.typography.titleMediumEmphasized,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier

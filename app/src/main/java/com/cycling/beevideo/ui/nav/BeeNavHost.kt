@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -26,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -44,6 +46,7 @@ import androidx.navigation.navArgument
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.DecoderMonitor
 import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.domain.repository.MediaCache
@@ -55,8 +58,11 @@ import com.cycling.beevideo.ui.history.HistoryRoute
 import com.cycling.beevideo.ui.home.HomeScreen
 import com.cycling.beevideo.ui.keep.KeepRoute
 import com.cycling.beevideo.ui.player.PlayerScreen
+import com.cycling.beevideo.ui.player.MiniPlayerWindow
+import com.cycling.beevideo.ui.player.PlaybackCoordinator
 import com.cycling.beevideo.ui.search.SearchRoute
 import com.cycling.beevideo.ui.settings.SettingsScreen
+import com.cycling.beevideo.ui.theme.BeeDimens
 
 object Routes {
     const val HOME = "home"
@@ -123,6 +129,10 @@ fun BeeNavHost(
     mediaCache: MediaCache,
     theme: ThemeSettings,
     incognito: IncognitoMode,
+    playbackCoordinator: PlaybackCoordinator,
+    decoderMonitor: DecoderMonitor,
+    /** 在小窗里。单 Activity + PiP 缩整窗，所以播放页要靠它把自己收成只剩画面。 */
+    inPipMode: Boolean = false,
     navController: NavHostController = rememberNavController(),
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -183,15 +193,34 @@ fun BeeNavHost(
                 targetState.destination.route in TAB_ROUTES
         }
 
-        NavHost(
-            navController = navController,
-            startDestination = Routes.HOME,
-            // ⚠️ 外层 Scaffold 已把系统栏安全区折进 innerPadding，必须再 consume 一次：
-            // 否则里面每个页面的 TopAppBar 会把同一份 inset 再加一遍，顶上多出一条空白
+        // 迷你窗只在"开关开着 + 不在播放页"时浮出来：在播放页时画面归页面自己，
+        // 而开关关着时退出播放页本来就该停播、不该留一块小窗
+        val miniState by playbackCoordinator.current.collectAsStateWithLifecycle()
+        val miniVisible by playbackCoordinator.miniVisible.collectAsStateWithLifecycle()
+        val pipEnabled by playbackCoordinator.pipEnabled.collectAsStateWithLifecycle()
+        val showingMini =
+            pipEnabled && miniVisible && miniState != null &&
+                destination?.route != Routes.PLAYER
+
+        /*
+         * 开关被关掉 = 收场。小窗会随 `showingMini` 一起消失，但**播放不会自己停** ——
+         * 不补这一下，就是"画面没了、声音还在响"，正是这个开关要消灭的状态。
+         * 没有在放的时候它是空操作（`pauseForExit` 里 holder 为空即返回）。
+         */
+        LaunchedEffect(pipEnabled) {
+            if (!pipEnabled) playbackCoordinator.pauseForExit()
+        }
+
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding),
+        ) {
+        NavHost(
+            navController = navController,
+            startDestination = Routes.HOME,
+            modifier = Modifier.fillMaxSize(),
             enterTransition = { if (isTabSwitch()) tabEnter else pageEnter },
             exitTransition = { if (isTabSwitch()) tabExit else pageExit },
             popEnterTransition = { if (isTabSwitch()) tabEnter else pagePopEnter },
@@ -232,6 +261,7 @@ fun BeeNavHost(
                     sources = sources,
                     settings = settings,
                     cache = mediaCache,
+                    decoderMonitor = decoderMonitor,
                     themeMode = mode,
                     onThemeModeChange = theme::set,
                     incognito = incognitoOn,
@@ -299,15 +329,43 @@ fun BeeNavHost(
                 val episodeIndex = entry.arguments?.getInt("episodeIndex") ?: 0
                 PlayerScreen(
                     content = content,
-                    library = library,
-                    settings = settings,
-                    incognito = incognito,
+                    coordinator = playbackCoordinator,
                     vodId = vodId,
                     lineIndex = lineIndex,
                     episodeIndex = episodeIndex,
+                    inPipMode = inPipMode,
                     onBack = { navController.popBackStack() },
                 )
             }
+        }
+
+        /*
+         * 应用内小窗。浮在内容之上、底栏之上（它已经落在 innerPadding 之内）。
+         * `showingMini` 里的"不在播放页"是必须的：内核只有一个画面出口，
+         * 播放页自己的 PlayerView 也在抢同一个 surface。
+         */
+        val mini = miniState
+        if (showingMini && mini != null) {
+            MiniPlayerWindow(
+                state = mini,
+                pipEnabled = pipEnabled,
+                onOpen = {
+                    // 先收小窗再导航：导航到播放页那一刻两边都想拿那个 surface
+                    playbackCoordinator.hideMiniPlayer()
+                    navController.navigate(
+                        Routes.player(mini.vodId, mini.lineIndex, mini.episodeIndex)
+                    )
+                },
+                // 关小窗 = 收场：落进度再暂停（与系统小窗被关掉同一条口径）
+                onClose = {
+                    mini.pauseAndSave()
+                    playbackCoordinator.hideMiniPlayer()
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(BeeDimens.screenMargin),
+            )
+        }
         }
     }
 }

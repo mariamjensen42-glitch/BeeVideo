@@ -96,6 +96,9 @@ androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.re
 # `implementation` 改成 `compileOnly`，编译期直接断。
 androidx-media3-datasource = { group = "androidx.media3", name = "media3-datasource", version.ref = "media3" }
 androidx-media3-database = { group = "androidx.media3", name = "media3-database", version.ref = "media3" }
+# 通知栏 / 锁屏 / 耳机键的媒体控制。`MediaSessionService` 在这里，播放器因此搬进了服务 ——
+# 界面侧（`MediaController`）与它隔一条进程边界语义（同进程实现，但仍走会话协议）。
+androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 
 # Image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }

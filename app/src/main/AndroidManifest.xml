@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 通知栏媒体控制：前台服务 + 通知。API 33+ 的通知本身还要运行时申请（播放页里问）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".BeeApplication"
@@ -15,12 +19,18 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.BeeVideo">
+        <!--
+          画中画：退出播放页时缩成系统小窗，画面继续（见 `PlayerPip`）。
+          `smallestScreenSize` 必须加进 configChanges —— 进出小窗会改屏幕尺寸，
+          不接管的话 Activity 会重建，播放页连同画面槽一起重来。
+        -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:exported="true"
             android:label="@string/app_name"
             android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.BeeVideo"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -29,6 +39,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          播放器住在这里：通知栏 / 锁屏 / 耳机键的媒体控制都由 MediaSessionService 接。
+          intent-filter 的 action 是 Media3 的约定（SessionToken 按它找服务）。
+        -->
+        <service
+            android:name=".player.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

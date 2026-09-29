@@ -133,6 +133,20 @@
     <string name="search_excluded_sources">已排除 %1$d 个</string>
     <string name="settings_section_playback">播放</string>
     <string name="settings_auto_next">自动播放下一集</string>
+    <string name="settings_picture_in_picture">画中画</string>
+    <string name="settings_picture_in_picture_body">开启后，退出播放页会在右下角留一个小窗继续放，按 Home 还会缩成桌面小窗；关闭时退出播放页就停止播放。两种情况下返回都不会退到手机桌面。</string>
+    <string name="settings_decoder">解码器</string>
+    <string name="settings_decoder_auto">自动</string>
+    <string name="settings_decoder_software">优先软解</string>
+    <string name="settings_decoder_body">设备没有软件解码器时会自动退回硬解，下面一行是实际生效的那个。</string>
+    <string name="settings_decoder_in_use">最近一次播放：%1$s（%2$s）</string>
+    <string name="settings_decoder_not_played">最近一次播放：还没播过</string>
+    <string name="decoder_software">软解</string>
+    <string name="decoder_hardware">硬解</string>
+    <string name="settings_headers">自定义请求头</string>
+    <string name="settings_headers_body">播放时补在站点给的头后面（站点给过的以站点为准），改完重新起播生效。</string>
+    <string name="settings_headers_placeholder">Referer: https://example.com\nUser-Agent: Mozilla/5.0</string>
+    <string name="settings_headers_invalid">%1$d 行没能认出来，已忽略（每行一条，格式「名称: 值」）</string>
     <string name="settings_section_cache">播放缓存</string>
     <string name="settings_cache_body">看过的内容会留一份在本机，重复观看和拖回去重看都不再走网络。超出上限时自动清理最久没看的。缓存只存在本机，不会上传。</string>
     <string name="settings_cache_switch">启用缓存</string>
@@ -201,6 +215,7 @@
     <string name="player_action_pause">暂停</string>
     <string name="player_action_fullscreen">全屏</string>
     <string name="player_action_exit_fullscreen">退出全屏</string>
+    <string name="player_mini_close">关闭小窗</string>
     <!-- 手势 HUD 的标签。亮度改的是本 App 窗口、音量改的是媒体流，都不落库 -->
     <string name="player_gesture_brightness">亮度</string>
     <string name="player_gesture_volume">音量</string>

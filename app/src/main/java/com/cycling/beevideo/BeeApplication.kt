@@ -10,6 +10,7 @@ import com.cycling.beevideo.data.settings.PrefsIncognitoMode
 import com.cycling.beevideo.data.settings.PrefsPlaybackSettings
 import com.cycling.beevideo.data.settings.PrefsSearchHistoryRepository
 import com.cycling.beevideo.data.settings.PrefsThemeSettings
+import com.cycling.beevideo.domain.repository.DecoderMonitor
 import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.domain.repository.MediaCache
@@ -17,9 +18,14 @@ import com.cycling.beevideo.domain.repository.PlaybackSettings
 import com.cycling.beevideo.domain.repository.SearchHistoryRepository
 import com.cycling.beevideo.domain.repository.ThemeSettings
 import com.cycling.beevideo.player.DiskMediaCache
+import com.cycling.beevideo.player.DecoderUsage
 import com.cycling.beevideo.player.MediaCacheProvider
+import com.cycling.beevideo.ui.player.PlaybackCoordinator
 import com.github.catvod.Init
 import com.github.catvod.utils.Notify
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlin.concurrent.thread
 
 /**
@@ -73,6 +79,16 @@ class BeeApplication : Application(), ImageLoaderFactory {
      */
     lateinit var searchHistory: SearchHistoryRepository
         private set
+
+    /**
+     * 播放会话的 App 级宿主。播放器住在服务里，离开页面音频继续 —— 换集、落进度、
+     * 自动连播都得有地方接着管，那个地方就在这里（见 `PlaybackCoordinator`）。
+     */
+    lateinit var playbackCoordinator: PlaybackCoordinator
+        private set
+
+    /** 设置页要看「实际生效的解码器」。进程级单例，播放内核上报、这里只转出口。 */
+    val decoderMonitor: DecoderMonitor get() = DecoderUsage
 
     /**
      * 封面图的加载器（Coil 全局单例）。
@@ -131,6 +147,15 @@ class BeeApplication : Application(), ImageLoaderFactory {
         // 同样只读两个值
         playback = PrefsPlaybackSettings(this)
         mediaCache = DiskMediaCache(this)
+        // 协程都挂在主线程 Immediate 上：会话与持有者的状态读写都在主线程
+        playbackCoordinator = PlaybackCoordinator(
+            context = this,
+            content = content,
+            library = library,
+            settings = playback,
+            incognito = incognito,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
 
         /*
          * 媒体缓存提前建。后台线程里做，`onCreate` 不等它 —— 建缓存要碰文件系统

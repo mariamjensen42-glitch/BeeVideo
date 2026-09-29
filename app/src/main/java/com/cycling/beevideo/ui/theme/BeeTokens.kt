@@ -33,6 +33,12 @@ object BeeDimens {
     val episodeProgressInset = 12.dp
     val playerCellSize = 48.dp
 
+    /**
+     * 应用内小窗的宽度。横屏视频 + 一行标题，16:9 下高约 117dp。
+     * 按 392dp 宽的竖屏算占一半多一点 —— 再大就挡内容，再小标题只能显示两个字。
+     */
+    val miniPlayerWidth = 208.dp
+
     // 观看历史行 3:4 → 72×96，加容器块上下各 16dp 内边距，整行 128dp。
     // 不用海报墙的 2:3：这一行右侧有五行信息要排，封面再拉长会把整行撑高
     val historyPosterWidth = 72.dp

@@ -1,7 +1,12 @@
 package com.cycling.beevideo.ui.player
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -15,104 +20,70 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.model.PlaybackState
-import com.cycling.beevideo.domain.model.resumePositionMs
 import com.cycling.beevideo.domain.repository.ContentRepository
-import com.cycling.beevideo.domain.repository.IncognitoMode
-import com.cycling.beevideo.domain.repository.LibraryRepository
-import com.cycling.beevideo.domain.repository.PlaybackSettings
-import com.cycling.beevideo.player.Media3PlaybackSession
 import com.cycling.beevideo.ui.components.LoadState
 import com.cycling.beevideo.ui.components.loadState
 import kotlinx.coroutines.delay
 
-/** 播放页。`vod_play_url` 未必是地址（spider 源常给内部 id），进页面后还要再兑换一次。 */
+/**
+ * 播放页。`vod_play_url` 未必是地址（spider 源常给内部 id），兑换与起播都在
+ * 持有者（`PlayerPlaybackState`）里，本页只管把详情推进去、把画面画出来。
+ *
+ * 持有者从 [coordinator] 取：它是 App 级的，退到后台再回来还是同一个。
+ *
+ * 退出这件事分两段：**返回键**退回 App 内的上一页、画面交给应用内小窗（`MiniPlayer`）；
+ * **按 Home** 是否缩成系统小窗由设置里的画中画开关定（`PlayerPip`）。
+ */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun PlayerScreen(
     content: ContentRepository,
-    library: LibraryRepository,
-    settings: PlaybackSettings,
-    incognito: IncognitoMode,
+    coordinator: PlaybackCoordinator,
     vodId: String,
     lineIndex: Int,
     episodeIndex: Int,
+    /** 在小窗里。PiP 缩的是整个窗口，所以"只剩画面"这件事得在这一层做。 */
+    inPipMode: Boolean = false,
     onBack: () -> Unit,
 ) {
-    val context = LocalContext.current
+    // 通知栏媒体控制要通知权限（API 33+ 默认不给）。不申请的话整套通知栏静默失效，
+    // 用户只会觉得"功能没做"
+    RequestNotificationPermission()
 
-    // 进页面时读一次：缓存目录建好之后改不了，与配额同样的取舍（见本页工厂里的说明）
-    val incognitoNow by incognito.enabled.collectAsStateWithLifecycle()
-
-    // 会话必须住 ViewModel：主题切换会重建 Activity，住 remember 里集号会退回路由参数
-    val viewModel: PlayerViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                PlayerViewModel(
-                    session = Media3PlaybackSession(
-                        // ⚠️ application context：会话比 Activity 活得久
-                        context = context.applicationContext,
-                        // 配额建好之后改不了，只在进页面时读一次
-                        quotaBytes = if (settings.cacheEnabled) settings.cacheQuotaBytes else 0L,
-                        // 无痕期间写独立缓存目录，退出无痕时整个删掉
-                        incognito = incognitoNow,
-                    ),
-                    library = library,
-                    vodId = vodId,
-                    initialEpisodeIndex = episodeIndex,
-                    initialLineIndex = lineIndex,
-                    autoPlayNext = settings.autoPlayNext,
-                )
-            }
-        },
-    )
-    val playback = viewModel.playback
+    // 同一部片复用同一个持有者：重进页面不该把正在放的东西重头来一遍
+    val state = coordinator.attach(vodId, lineIndex, episodeIndex)
 
     val detailState = loadState(vodId) { content.detail(vodId) }
     val vod = (detailState as? LoadState.Ready)?.value
-    // 线路号取自持有者，不是路由参数：路由参数进来就定死，靠它换线路会重建整个会话
-    val line = vod?.lines?.getOrNull(playback.lineIndex)
-    val episodes = line?.episodes.orEmpty()
 
-    // 夹取要在持有者里做，界面夹的话落库的仍是越界那个
-    LaunchedEffect(episodes.size) { playback.onEpisodesChanged(episodes.size) }
-    val safeIndex = playback.episodeIndex
+    // 详情就绪 → 推进持有者 → 应用路由起点 → 起播。键含 vod 本身：加载完成的那次重组才会触发
+    //
+    // ⚠️ 顺序不能反：同一部片复用持有者时（看完第 3 集返回、又点「第 05 集」进来），
+    // 先起播会把上一次那一集又拉起来，用户先看见第 3 集闪一下再跳到第 5 集。
+    // ⚠️ `vod` 为 null 时不 bind：会把复用中的持有者的快照抹掉，而它此刻可能正在播 ——
+    // 那一下的落库写进去的就是一条空片名。
+    LaunchedEffect(vod, lineIndex, episodeIndex) {
+        vod?.let(state::bind)
+        state.applyRoute(lineIndex, episodeIndex)
+        state.ensurePlaying()
+    }
+
+    // 线路号取自持有者，不是路由参数：路由参数进来就定死，靠它换线路会重建整个会话
+    val line = vod?.lines?.getOrNull(state.lineIndex)
+    val episodes = line?.episodes.orEmpty()
+    val safeIndex = state.episodeIndex
     val current = episodes.getOrNull(safeIndex)
 
-    // vod?.name 必须进 key：详情是异步来的，漏掉它第一次绑定拿的是空快照
-    LaunchedEffect(vod?.name, line?.name, current?.name) {
-        playback.bindContext(vod, line?.name.orEmpty(), current?.name.orEmpty())
-    }
-
-    val targetState = loadState(vodId, playback.lineIndex, safeIndex, current?.url) {
-        val episode = current ?: return@loadState null
-        content.playTarget(vodId, line?.name.orEmpty(), episode.url)
-    }
-    val target = (targetState as? LoadState.Ready)?.value
-
-    // 必须在起播之前拿到，否则用户能看见"先 0 起播、再跳一下"
-    val progressState = loadState(vodId) { library.progressOf(vodId) }
-    val progress = (progressState as? LoadState.Ready)?.value
-
-    // 等 progressState 读完再开播：加载中先返回，读完转 Ready 会重启本 effect
-    LaunchedEffect(target?.url, progressState) {
-        val play = target ?: return@LaunchedEffect
-        if (progressState is LoadState.Loading) return@LaunchedEffect
-
-        playback.open(play, resumePositionMs(progress, line?.name.orEmpty(), safeIndex))
-    }
-
     // 被系统回收的话，距上次周期上报的进度就没了
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { playback.onStop() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { state.onStop() }
 
-    val playbackState by playback.state.collectAsStateWithLifecycle()
+    val playbackState by state.state.collectAsStateWithLifecycle()
     // 局部变量：by 委托出来的值不能智能转换
     val currentState = playbackState
 
@@ -136,12 +107,45 @@ fun PlayerScreen(
 
     var fullscreenIntent by rememberSaveable { mutableStateOf(false) }
     PlayerFullscreenEffect(fullscreenIntent)
-    BackHandler(enabled = fullscreenIntent) { fullscreenIntent = false }
 
     // ⚠️ 布局判据用真实方向而非点击意图：requestedOrientation 是异步的，
-    // 按意图切布局会让竖屏窗口把画面压成中间一条
+    // 按意图切布局会让竖屏窗口把画面压成中间一条。
+    // 小窗里也算全屏 —— 顶栏与选集在那块巴掌大的窗口里没有容身之处。
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val fullscreenLayout = isLandscape || inPipMode
+
+    val context = LocalContext.current
+
+    // 开关是用户的（设置页，默认关），能力是设备的 —— 两个都要
+    val pipSwitch by coordinator.pipEnabled.collectAsStateWithLifecycle()
+    val pipEnabled = pipSwitch && remember { PlayerPip.isSupported(context) }
+
+    // 只有播放页与小窗允许"按 Home 就缩成系统小窗"。放在这里而不是导航宿主：那个只组合一次，
+    // `remember` 会一直拿着进设置页之前的旧值（见 `PipAutoEnterEffect`）
+    PipAutoEnterEffect(shouldAutoEnterPip(currentState, pipEnabled))
+
+    /*
+     * 退出播放页 = **退回 App 内的上一页**，永远不退到手机桌面。
+     *
+     * ⚠️ 这里**不**调 `enterPictureInPictureMode`：那会把整个 App 缩成一块浮在手机桌面上的
+     * 窗口 —— 用户按一下返回就被踢出 App 了。系统 PiP 只负责"离开 App"那一段（按 Home）。
+     *
+     * 开关开着才把小窗叫出来；关着（默认）就是"退出播放页 = 停止播放"。
+     */
+    val leavePlayer: () -> Unit = {
+        if (pipEnabled) {
+            coordinator.showMiniPlayer()
+        } else {
+            coordinator.hideMiniPlayer()
+            state.pauseAndSave()
+        }
+        onBack()
+    }
+
+    // 全屏里返回 = 退出全屏；否则 = 退出播放页。PiP 里两个都不接管，交给系统关窗口
+    BackHandler(enabled = !inPipMode && fullscreenIntent) { fullscreenIntent = false }
+    BackHandler(enabled = !inPipMode && !fullscreenIntent) { leavePlayer() }
 
     val systemControls = rememberPlayerSystemControls()
 
@@ -151,50 +155,71 @@ fun PlayerScreen(
             lineName = line?.name.orEmpty(),
             episodeName = current?.name ?: stringResource(R.string.player_no_episode),
             lines = vod?.lines.orEmpty(),
-            currentLineIndex = playback.lineIndex,
+            currentLineIndex = state.lineIndex,
             episodes = episodes,
             currentIndex = safeIndex,
         ),
-        onSelectLine = playback::selectLine,
-        onSelectEpisode = playback::selectEpisode,
-        onPrev = { if (safeIndex > 0) playback.selectEpisode(safeIndex - 1) },
-        onNext = { if (safeIndex < episodes.lastIndex) playback.selectEpisode(safeIndex + 1) },
-        onBack = onBack,
-        isFullscreen = isLandscape,
+        onSelectLine = state::selectLine,
+        onSelectEpisode = state::selectEpisode,
+        onPrev = { if (safeIndex > 0) state.selectEpisode(safeIndex - 1) },
+        onNext = { if (safeIndex < episodes.lastIndex) state.selectEpisode(safeIndex + 1) },
+        onBack = leavePlayer,
+        isFullscreen = fullscreenLayout,
         player = { modifier ->
             PlaybackSurface(
-                session = playback.session,
-                isBuffering = currentState is PlaybackState.Buffering && !controlsVisible,
+                session = state.session,
+                isBuffering = !inPipMode &&
+                    currentState is PlaybackState.Buffering &&
+                    !controlsVisible,
                 modifier = modifier,
             ) {
-                // 手势层在最下面是刻意的：控件先消费事件，剩下的才落回手势层
-                PlayerGestureLayer(
-                    positionMs = playback.positionMs,
-                    durationMs = playback.durationMs,
-                    systemControls = systemControls,
-                    onTap = { controlsVisible = !controlsVisible },
-                    onSeek = playback::seekTo,
-                    onFeedback = { gestureFeedback = it },
-                )
-                PlayerControls(
-                    visible = controlsVisible,
-                    isPlaying = isPlaying,
-                    positionMs = playback.positionMs,
-                    durationMs = playback.durationMs,
-                    speed = playback.speed,
-                    // 图标跟意图走：转屏要几百毫秒，跟布局走按钮看着像没按下去
-                    isFullscreen = fullscreenIntent,
-                    onToggleFullscreen = { fullscreenIntent = !fullscreenIntent },
-                    onPlayPause = playback::togglePlayPause,
-                    onSeek = playback::seekTo,
-                    onSpeedChange = playback::selectSpeed,
-                )
-                PlayerGestureOverlay(
-                    feedback = gestureFeedback,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                // 小窗里系统自带展开/关闭按钮，再画一层控件只会挤成一团
+                if (!inPipMode) {
+                    // 手势层在最下面是刻意的：控件先消费事件，剩下的才落回手势层
+                    PlayerGestureLayer(
+                        positionMs = state.positionMs,
+                        durationMs = state.durationMs,
+                        systemControls = systemControls,
+                        onTap = { controlsVisible = !controlsVisible },
+                        onSeek = state::seekTo,
+                        onFeedback = { gestureFeedback = it },
+                    )
+                    PlayerControls(
+                        visible = controlsVisible,
+                        isPlaying = isPlaying,
+                        positionMs = state.positionMs,
+                        durationMs = state.durationMs,
+                        speed = state.speed,
+                        // 图标跟意图走：转屏要几百毫秒，跟布局走按钮看着像没按下去
+                        isFullscreen = fullscreenIntent,
+                        onToggleFullscreen = { fullscreenIntent = !fullscreenIntent },
+                        onPlayPause = state::togglePlayPause,
+                        onSeek = state::seekTo,
+                        onSpeedChange = state::selectSpeed,
+                    )
+                    PlayerGestureOverlay(
+                        feedback = gestureFeedback,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
             }
         },
     )
+}
 
+/** 通知权限只在进播放页时问一次；拒绝就拒绝，不再纠缠（连播照常，只是没通知栏）。 */
+@Composable
+private fun RequestNotificationPermission() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {}
+    LaunchedEffect(Unit) {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 }

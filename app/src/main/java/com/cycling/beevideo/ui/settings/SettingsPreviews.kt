@@ -3,6 +3,7 @@ package com.cycling.beevideo.ui.settings
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import com.cycling.beevideo.domain.model.ThemeMode
+import com.cycling.beevideo.ui.preview.FakeDecoderMonitor
 import com.cycling.beevideo.ui.preview.FakeMediaCache
 import com.cycling.beevideo.ui.preview.FakePlaybackSettings
 import com.cycling.beevideo.ui.preview.FakeSourceRepository
@@ -26,6 +27,7 @@ private fun SettingsScreenPreview() {
                 settings = FakePlaybackSettings(),
                 // 给一个非零占用，才看得见"已用 1.2 GB"那一行的排版
                 cache = FakeMediaCache(usage = 1_288_490_188L),
+                decoderMonitor = FakeDecoderMonitor(),
                 themeMode = ThemeMode.SYSTEM,
                 onThemeModeChange = {},
                 incognito = false,
@@ -51,6 +53,7 @@ private fun SettingsScreenLightPreview() {
                 sources = FakeSourceRepository.threeSourcesReady(),
                 settings = FakePlaybackSettings(),
                 cache = FakeMediaCache(usage = 1_288_490_188L),
+                decoderMonitor = FakeDecoderMonitor(),
                 themeMode = ThemeMode.LIGHT,
                 onThemeModeChange = {},
                 incognito = false,
@@ -77,6 +80,7 @@ private fun SettingsScreenManySourcesPreview() {
                 sources = FakeSourceRepository.manySourcesReady(),
                 settings = FakePlaybackSettings(),
                 cache = FakeMediaCache(usage = 1_288_490_188L),
+                decoderMonitor = FakeDecoderMonitor(),
                 themeMode = ThemeMode.SYSTEM,
                 onThemeModeChange = {},
                 incognito = false,
@@ -103,6 +107,7 @@ private fun SettingsScreenIncognitoPreview() {
                 sources = FakeSourceRepository.threeSourcesReady(),
                 settings = FakePlaybackSettings(),
                 cache = FakeMediaCache(usage = 1_288_490_188L),
+                decoderMonitor = FakeDecoderMonitor(),
                 themeMode = ThemeMode.SYSTEM,
                 onThemeModeChange = {},
                 incognito = true,

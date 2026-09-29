@@ -34,6 +34,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.model.ThemeMode
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.DecoderMonitor
 import com.cycling.beevideo.domain.repository.MediaCache
 import com.cycling.beevideo.domain.repository.PlaybackSettings
 import com.cycling.beevideo.ui.components.beeTopAppBarColors
@@ -52,6 +53,7 @@ fun SettingsScreen(
     sources: ContentSourceRepository,
     settings: PlaybackSettings,
     cache: MediaCache,
+    decoderMonitor: DecoderMonitor,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     /** 无痕开关的当前值。它进的是参数不是本页的 `remember`：真相在 App 级那条流上。 */
@@ -81,8 +83,15 @@ fun SettingsScreen(
     var cacheEnabled by remember { mutableStateOf(settings.cacheEnabled) }
     var cacheQuota by remember { mutableStateOf(settings.cacheQuotaBytes) }
     var autoPlayNext by remember { mutableStateOf(settings.autoPlayNext) }
+    // 这一项**不走本页的 remember**：真相在 App 级那条流上（播放页与小窗都要当场跟着变）
+    val pictureInPicture by settings.pictureInPicture.collectAsStateWithLifecycle()
+    var decoderPreference by remember { mutableStateOf(settings.decoderPreference) }
+    var headerText by remember { mutableStateOf(settings.customHeaderText) }
     var confirmClear by remember { mutableStateOf(false) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
+
+    // 实际生效的解码器是进程级事实，不在本页持有
+    val decoderInUse by decoderMonitor.inUse.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -148,6 +157,19 @@ fun SettingsScreen(
                 onAutoPlayNextChange = { on ->
                     autoPlayNext = on
                     settings.autoPlayNext = on
+                },
+                pictureInPicture = pictureInPicture,
+                onPictureInPictureChange = settings::setPictureInPicture,
+                decoderPreference = decoderPreference,
+                onDecoderPreferenceChange = { value ->
+                    decoderPreference = value
+                    settings.decoderPreference = value
+                },
+                decoderInUse = decoderInUse,
+                headerText = headerText,
+                onHeaderTextChange = { text ->
+                    headerText = text
+                    settings.customHeaderText = text
                 },
             )
 

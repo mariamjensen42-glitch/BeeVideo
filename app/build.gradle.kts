@@ -157,6 +157,8 @@ dependencies {
     // database。虽然是 exoplayer 的传递依赖，但我们是**直接** new 它们的，按上面的理由自己声明。
     implementation(libs.androidx.media3.datasource)
     implementation(libs.androidx.media3.database)
+    // MediaSession / MediaController：通知栏媒体控制，播放器住在 PlaybackService 里
+    implementation(libs.androidx.media3.session)
 
     // Image loading
     implementation(libs.coil.compose)

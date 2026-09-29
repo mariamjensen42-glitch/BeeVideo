@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -17,7 +18,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.cycling.beevideo.R
+import com.cycling.beevideo.domain.model.DecoderInUse
+import com.cycling.beevideo.domain.model.DecoderPreference
 import com.cycling.beevideo.domain.model.ThemeMode
+import com.cycling.beevideo.domain.model.invalidCustomHeaderLineCount
 import com.cycling.beevideo.domain.repository.PlaybackSettings
 import com.cycling.beevideo.ui.components.BeeChipRow
 import com.cycling.beevideo.ui.theme.BeeDimens
@@ -50,11 +54,18 @@ internal fun AppearanceSection(
     }
 }
 
-/** 【播放】自动连播开关。 */
+/** 【播放】自动连播 / 画中画 / 解码器偏好 / 自定义请求头。全是**立刻落盘**，攒着不写等于没改。 */
 @Composable
 internal fun PlaybackSection(
     autoPlayNext: Boolean,
     onAutoPlayNextChange: (Boolean) -> Unit,
+    pictureInPicture: Boolean,
+    onPictureInPictureChange: (Boolean) -> Unit,
+    decoderPreference: DecoderPreference,
+    onDecoderPreferenceChange: (DecoderPreference) -> Unit,
+    decoderInUse: DecoderInUse?,
+    headerText: String,
+    onHeaderTextChange: (String) -> Unit,
 ) {
     SettingsSection(title = stringResource(R.string.settings_section_playback)) {
         Row(
@@ -70,6 +81,96 @@ internal fun PlaybackSection(
             Switch(
                 checked = autoPlayNext,
                 onCheckedChange = onAutoPlayNextChange,
+            )
+        }
+
+        Spacer(Modifier.height(BeeDimens.gapMedium))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.settings_picture_in_picture),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = pictureInPicture,
+                onCheckedChange = onPictureInPictureChange,
+            )
+        }
+        Spacer(Modifier.height(BeeDimens.gapTiny))
+        // 两档的差别要写清楚：「退出播放页之后声音还在不在」是用户唯一能感知到的结果
+        Text(
+            text = stringResource(R.string.settings_picture_in_picture_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(BeeDimens.gapMedium))
+        Text(
+            text = stringResource(R.string.settings_decoder),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(BeeDimens.gapTiny))
+        BeeChipRow(
+            items = DecoderPreference.entries,
+            selectedIndex = DecoderPreference.entries.indexOf(decoderPreference),
+            onSelect = { index -> onDecoderPreferenceChange(DecoderPreference.entries[index]) },
+        ) { item ->
+            Text(
+                text = stringResource(item.labelRes),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        Spacer(Modifier.height(BeeDimens.gapTiny))
+        Text(
+            text = stringResource(R.string.settings_decoder_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(BeeDimens.gapTiny))
+        // 偏好只是偏好 —— 设备缺软件解码器时内核会静默回落硬解。没有这一行，
+        // 「切了软解还是卡」就会被归咎到源站头上
+        Text(
+            text = if (decoderInUse == null) {
+                stringResource(R.string.settings_decoder_not_played)
+            } else {
+                stringResource(
+                    R.string.settings_decoder_in_use,
+                    decoderInUse.name,
+                    stringResource(if (decoderInUse.software) R.string.decoder_software else R.string.decoder_hardware),
+                )
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(BeeDimens.gapMedium))
+        Text(
+            text = stringResource(R.string.settings_headers),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(BeeDimens.gapTiny))
+        OutlinedTextField(
+            value = headerText,
+            onValueChange = onHeaderTextChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.settings_headers_placeholder)) },
+            // 单行关掉：一条头就是一行，折行会让「每行一条」的心智失效
+            singleLine = false,
+            maxLines = 4,
+        )
+        val invalid = invalidCustomHeaderLineCount(headerText)
+        if (invalid > 0) {
+            Spacer(Modifier.height(BeeDimens.gapTiny))
+            Text(
+                text = stringResource(R.string.settings_headers_invalid, invalid),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
             )
         }
     }
@@ -244,6 +345,14 @@ internal val ThemeMode.labelRes: Int
         ThemeMode.SYSTEM -> R.string.settings_theme_system
         ThemeMode.LIGHT -> R.string.settings_theme_light
         ThemeMode.DARK -> R.string.settings_theme_dark
+    }
+
+/** 解码器偏好的界面文案。同样不挂到枚举上 —— 取值域的知识留在取值的地方。 */
+@get:StringRes
+internal val DecoderPreference.labelRes: Int
+    get() = when (this) {
+        DecoderPreference.AUTO -> R.string.settings_decoder_auto
+        DecoderPreference.PREFER_SOFTWARE -> R.string.settings_decoder_software
     }
 
 /** 人类可读的容量。只给一位小数 —— 设置页要的是量级感，不是精确到字节。 */

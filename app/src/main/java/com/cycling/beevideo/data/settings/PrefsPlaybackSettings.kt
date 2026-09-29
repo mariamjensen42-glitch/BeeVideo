@@ -1,7 +1,11 @@
 package com.cycling.beevideo.data.settings
 
 import android.content.Context
+import com.cycling.beevideo.domain.model.DecoderPreference
 import com.cycling.beevideo.domain.repository.PlaybackSettings
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * [PlaybackSettings] 的 SharedPreferences 实现。
@@ -42,10 +46,40 @@ class PrefsPlaybackSettings(context: Context) : PlaybackSettings {
         get() = prefs.getBoolean(KEY_AUTO_NEXT, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_NEXT, value).apply()
 
+    /**
+     * 枚举以**名字字符串**落盘：脏值（换了版本改了枚举名）回落 [DecoderPreference.AUTO]，
+     * 不让一条未知字符串把设置页的 chip 行顶崩。
+     */
+    override var decoderPreference: DecoderPreference
+        get() = prefs.getString(KEY_DECODER, null)
+            ?.let { name -> DecoderPreference.entries.firstOrNull { it.name == name } }
+            ?: DecoderPreference.AUTO
+        set(value) = prefs.edit().putString(KEY_DECODER, value.name).apply()
+
+    /**
+     * 唯一做成 Flow 的一项（理由见接口注释）。初值在构造期读一次 ——
+     * 之后以内存里这份为准，写的时候两边一起写；不然别处改了 prefs，
+     * 这条流就永远停在构造时的那个值上。
+     */
+    private val _pictureInPicture = MutableStateFlow(prefs.getBoolean(KEY_PICTURE_IN_PICTURE, false))
+    override val pictureInPicture: StateFlow<Boolean> = _pictureInPicture.asStateFlow()
+
+    override fun setPictureInPicture(enabled: Boolean) {
+        _pictureInPicture.value = enabled
+        prefs.edit().putBoolean(KEY_PICTURE_IN_PICTURE, enabled).apply()
+    }
+
+    override var customHeaderText: String
+        get() = prefs.getString(KEY_CUSTOM_HEADERS, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_CUSTOM_HEADERS, value).apply()
+
     private companion object {
         const val PREFS_NAME = "beevideo.playback"
         const val KEY_CACHE_ENABLED = "cache_enabled"
         const val KEY_CACHE_QUOTA = "cache_quota_bytes"
         const val KEY_AUTO_NEXT = "auto_play_next"
+        const val KEY_DECODER = "decoder_preference"
+        const val KEY_CUSTOM_HEADERS = "custom_headers_text"
+        const val KEY_PICTURE_IN_PICTURE = "picture_in_picture"
     }
 }

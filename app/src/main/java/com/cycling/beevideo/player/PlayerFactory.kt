@@ -7,11 +7,14 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import com.cycling.beevideo.data.source.vod.catvod.CatVodHttp
+import com.cycling.beevideo.domain.model.DecoderPreference
 
 /**
  * 播放器的组装点：缓冲策略、缓存数据源、请求头 / UA。
@@ -24,11 +27,43 @@ import com.cycling.beevideo.data.source.vod.catvod.CatVodHttp
  */
 object PlayerFactory {
 
-    /** 建一个**空**播放器（无媒体源）。调用方随后 `setMediaSource` + `prepare`。 */
-    fun newPlayer(context: Context): ExoPlayer =
+    /**
+     * 建一个**空**播放器（无媒体源）。调用方随后 `setMediaSource` + `prepare`。
+     *
+     * 解码器偏好传的是**提供者**不是值：`MediaCodecSelector` 在每次解码器初始化时
+     * 都会被问到（换集 / 换线路都是一次新选择），现读才能做到「改设置 → 重新起播
+     * 就生效」。建播放器时定死的话，播放器住在服务里活得比设置页久，改了要重启。
+     */
+    fun newPlayer(
+        context: Context,
+        decoderPreference: () -> DecoderPreference = { DecoderPreference.AUTO },
+    ): ExoPlayer =
         ExoPlayer.Builder(context)
+            .setRenderersFactory(
+                DefaultRenderersFactory(context)
+                    .setMediaCodecSelector(LiveDecoderSelector(decoderPreference))
+                    // 「优先软解」挑不到软件解码器时回落硬解，而不是整条流播不了
+                    .setEnableDecoderFallback(true)
+            )
             .setLoadControl(loadControl())
             .build()
+
+    /**
+     * 每次选解码器时**现读**偏好。官方 `PREFER_SOFTWARE` 本身就是
+     * 「软件优先，没有就回落硬件」，回落语义已经在这层，不用再写。
+     */
+    private class LiveDecoderSelector(
+        private val preference: () -> DecoderPreference,
+    ) : MediaCodecSelector {
+        override fun getDecoderInfos(
+            mimeType: String,
+            requiresSecureDecoder: Boolean,
+            requiresTunnelingDecoder: Boolean,
+        ) = when (preference()) {
+            DecoderPreference.PREFER_SOFTWARE -> MediaCodecSelector.PREFER_SOFTWARE
+            DecoderPreference.AUTO -> MediaCodecSelector.DEFAULT
+        }.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+    }
 
     /**
      * 缓冲策略。四个数字都偏离默认值，理由是实测的：
