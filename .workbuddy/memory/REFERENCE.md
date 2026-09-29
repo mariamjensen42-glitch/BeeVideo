@@ -1083,4 +1083,43 @@ ActivityManager: Process com.cycling.beevideo (pid 2204) has died: fg  TOP
   里用 `android:fillType="evenOdd"` 挖空。
 - 配色：背景对角渐变 `#FFD149 → #F08C00`（`aapt:attr` 内联，颜色**必须带 alpha**），前景 `#1B1A17`。
 - 预览走 `.workbuddy/scripts/render_icon.py`（Pillow 复刻几何），产出 `docs/design/icon-preview.png`。
+- ⚠️ `mipmap-*dpi/*.webp` **已删别再补回**（改图标只动 vector XML）；`<monochrome>` 指向**单色版**。
+
+## 从 MEMORY.md 卸载的论证（2026-09-29 压缩，判据仍在 MEMORY，这里存"为什么"）
+
+### 「最亮的一块填充」不许按角色名取
+primary 与 primaryContainer 的明暗在浅色 / 深色**两套方案里正好对调**，所以按角色名取必错一半。判据必须按 `scheme.surface.luminance()` 判（现活在 `SkeletonBlock` 里）。
+另外：**「hero 布局」这个概念已经不存在了** —— 首页刊头组件连尺寸常量一起删了。
+
+### 强跳过模式下 unstable 参数按引用比较
+Kotlin 2.0.20+ **默认开启强跳过**。此时 **unstable 参数按引用 `===` 比较**：列表重新解析出的新实例（内容相同）照样触发重组。在 `app/compose-stability.conf` 里把 `domain.model.*` 声明为 stable 之后改按 `equals()`。
+注意这条**不是** 说「否则 lambda 无法 memoize」—— 强跳过本来就 remember 捕获的 lambda。别给 domain 加 `@Immutable`（会让 domain 依赖 Compose）；别把含 `var` / `StateFlow` 的类塞进那个配置文件。
+网格**混排必须给 `contentType`**（整行项 / 海报项 / footer 分开），否则复用池混用 → 每次滚动都重新测量。
+翻页状态**在 item 内读**（`state.more.collectAsStateWithLifecycle()` 写在 footer 的 item 里）；提到函数顶层就是整页跟着重组。
+Coil 全局 `ImageLoader` 在 `BeeApplication`，`respectCacheHeaders(false)` —— 否则图床发 `no-cache` 时每次滚回来都要重下。
+**Coil 2.7 默认单例**内存 + 磁盘缓存都开（实测 `cache/image_cache` 1574 张 / 80MB，单张中位 30KB、max 2.4MB）。列表图按卡片尺寸解码，所以「图大所以慢」不成立 —— 瓶颈在源站 TTFB。
+
+### 分页与网格 key
+翻页判据一律用源给的 `pagecount`（`VodPage.totalPages`）；`null` = 源没给，退化成「本页有内容就续」。追加必须 `distinctBy(id)` —— LazyGrid 的 key 撞车是**直接崩**，不是显示两张。「推荐」位固定 1 页（源首页那批没有分页）。
+`itemsIndexed` 的 key 用 `"$index:$name"`，只用集名会在源给出重名剧集时撞 key。首页网格触底预取的判据用**最后可见项下标 ≥ `total − 1 − posterColumns`** —— 项高不等，用滚动偏移换算不出「还剩几行」。
+
+### 播放器状态机与全屏
+`STATE_ENDED` **不能并进 `Idle`**，并了就没法区分「播完了」和「还没起播」，所以有独立的 `PlaybackState.Ended`。自动下一集必须在**持有者**里按状态**转移**触发：`Ended` 会一直持续到新集起播（取地址要一次网络往返），按「当前是不是 Ended」去推会一口气跳完整季 —— **离开 Ended 才重新武装**。判据是纯函数 `autoNextEpisode`。
+**线路号住在持有者里，不跟路由参数走**（跟了就得重新导航 = 会话连同播放器一起重建）。换线路与切集一律**先落库再改号** —— 进度记录带线路名，顺序反了会把刚看的时长记到新线路名下。
+**全屏布局的判据是真实 `orientation`，不是点击意图**：`requestedOrientation` 是异步的（几百 ms），按意图立刻切布局 → 那几百毫秒里竖屏窗口 + `RESIZE_MODE_FIT` 把画面缩成中间一条。意图只用来驱动转向 / 返回键 / 按钮图标。
+全屏与竖屏**必须共用一棵组合树**（只改画面槽 modifier）：`if (isFullscreen){...; return}` 两棵子树 = `AndroidView` 重建 = `SurfaceView` detach/attach = 黑闪一帧。全屏时 `contentWindowInsets` 显式给 0，且**不能挂 `verticalScroll`**（`fillMaxSize` 会落进无穷高度约束）。
+控制层**自绘**：`useController = false` 是前提；**显隐由外部传参**（缓冲转圈只在收起时显示，画在控件**下面**）；颜色**不走主题角色色**。画面区只有 16:9 高，展开倍速档位要**让出中央按钮**。
+alpha28 的 `Slider` 必须用 `SliderState` 重载：`SliderState(value, steps, trackRange)`。`valueRange` 是 `@Deprecated(HIDDEN)` 的 getter（写了**报错**），而 `trackRange` 建好就不可变 → 进度条按 **0..1 归一化**；松手 seek 的时长要 `rememberUpdatedState` 读最新（首帧是 0）。
+手势层在**控件下面**：定轴前一旦见 `isConsumed`，整段作废（否则拖完滑块松手会被当成单击、把控件收起）；`pointerInput` 的 key **不能每帧变** → 用 `rememberUpdatedState`。
+
+### 无痕模式的症状
+`saveProgress` 的拦截若放到 `ProgressWriteGate.allow()` **之后**，被丢弃的那次仍会刷新时间戳，表现是「关了无痕，前 5 秒进度还是没记上」。
+无痕下 `progressOf` **也返回 `null`**（连续播都不给）；`progressList` / `keeps` / `isKept` 用 `combine(dao 流, incognito.enabled)` ——「打开即空、关掉即回」由同一条流保证，界面零分支。
+媒体缓存**按目录名分桶**（`media` / `media-incognito`）：`SimpleCache` 同目录会加文件锁，只有不同目录才能各建一个实例。退出无痕删**整个目录**；Coil 磁盘缓存没有按时间挑的接口，所以封面在无痕下 `diskCachePolicy = DISABLED`，只进内存。
+`BeeApplication` 里 **`incognito` 必须先于 `library` 建**（仓储要订阅它）；`newImageLoader()` 必须返回**同一个字段实例**，否则退出无痕时清的是一个没人用过的 Coil 内存缓存。
+进程被杀时无痕目录会残留（只是可再生缓存，不做启动兜底清理）。
+
+### 零散规则（卸载自 MEMORY）
+- 路由参数**必须** `Uri.encode(vodId)`，读取端**不要** decode（踩过一次）。
+- `AdbShell` 类脚本要联网，必须在**同一次进程调用里**先建 `adb reverse` —— adb server 每次调用结束就被回收。
 
