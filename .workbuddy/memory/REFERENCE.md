@@ -1123,3 +1123,195 @@ alpha28 的 `Slider` 必须用 `SliderState` 重载：`SliderState(value, steps,
 - 路由参数**必须** `Uri.encode(vodId)`，读取端**不要** decode（踩过一次）。
 - `AdbShell` 类脚本要联网，必须在**同一次进程调用里**先建 `adb reverse` —— adb server 每次调用结束就被回收。
 
+
+### 从 MEMORY 下沉的论证（2026-09-29 二轮压缩）
+
+- ⚠️ `BeeChipGrid` 必须包 `CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp)`, 否则 `ToggleButton` 48dp 触摸目标把**行距**撑成 10.4dp。一屏放不下时收 `chipContentPadding`(**只收水平**); `ToggleButtonSize.Small` 只改高度。
+
+- ⚠️ 全屏与竖屏**共用一棵组合树**(只改画面槽 modifier); 全屏时 `contentWindowInsets` 给 0, **不能挂 `verticalScroll`**。
+
+### ⚠️ MediaSession 的 `AcceptedResultBuilder()` 无参构造给的是 `EMPTY`/`EMPTY`（2026-09-29 真机查出的黑屏真因）
+
+**症状**：播放页有声音、`dumpsys media_session` 里 `state=PLAYING` 且位置在走、logcat 里视频解码器正常创建、SurfaceFlinger 也知道有视频解码 —— **但画面全黑**；同时进度条永远 `00:00`、暂停/拖动/倍速全无反应，进度一条都不落库。UI 本身正常（标题/线路/选集都在）。
+
+**真因**：`PlaybackService` 的 `onConnect` 写的是
+
+```kotlin
+MediaSession.ConnectionResult.AcceptedResultBuilder()   // ← 无参
+    .setAvailableSessionCommands(...)                    // 只设了这条
+    .build()
+```
+
+`javap -p -c 'androidx.media3.session.MediaSession$ConnectionResult$AcceptedResultBuilder'` 打出来的无参构造是：
+
+```
+availableSessionCommands = SessionCommands.EMPTY
+availablePlayerCommands  = Player.Commands.EMPTY     // ← 零条 player 命令
+```
+
+（传 `MediaSession` 的那个重载才给 `DEFAULT_*`，而它已废弃；无参构造**不是**"默认集"。）
+
+于是控制器手上一条 player 命令都没有。`setVideoSurface`、`getCurrentPosition`、`play/pause`、`seekTo`、`getPlaybackParameters` **全是命令** —— media3 对未授权的命令是**直接丢弃、不抛不报**（`BasePlayer` 里静默 return），所以只有"黑屏 + 控件全哑"这一组症状，没有任何一条日志指向它。
+
+**修法**：两条命令行各设一次。
+
+```kotlin
+.setAvailableSessionCommands(DEFAULT_SESSION_COMMANDS.buildUpon().add(SessionCommand(...)).build())
+.setAvailablePlayerCommands(MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
+```
+
+`DEFAULT_PLAYER_COMMANDS` = `Player.Commands.Builder().addAllCommands().build()`（static 块里打出来的），含 `setVideoSurface`。
+
+**排查路径可复用**：
+1. 先分清"没起播"还是"起播了没画面" —— `dumpsys media_session | grep state=PlaybackState` 看 `state` 与 `position` 是否在走；`logcat | grep BeePlayer|Codec` 看解码器有没有建。
+2. 两者都说在播 → 问题在**界面到内核的命令通路**，不是源或解码。
+3. 命令通路的默认值**不能靠猜**，`javap -p -c <类的无参构造>` 看有没有 `putfield`（没赋的值就是 Java 零值/`EMPTY`）。
+
+### 画中画（PiP）四个坑（2026-09-29 真机踩出来的）
+
+**1. 「关掉小窗」与「展开小窗」都走 `onPictureInPictureModeChanged(false)`，而且它的先后与 `onStop` 无关。**
+
+实测：点小窗的 ✕ 后，`dumpsys activity activities` 里 **任务还在**（`Recent #1` 还在，`visible=false`），
+也就是说 Activity 只是被移到后台，**没有 finish**。两件事因此都不成立：
+- `onTaskRemoved` 不会触发（任务没被移除）；
+- `onStop` 与 PiP 回调的先后系统没保证，不能"在 onStop 里看 PiP 标志"。
+
+可靠判法（`MainActivity`）：
+```
+onPictureInPictureModeChanged(false) → pipExited = true
+onStart()                            → pipExited = false      // 展开会回前台
+onStop()                             → postDelayed(300) {     // 等生命周期走完
+      if (pipExited && !isInPictureInPictureMode &&
+          lifecycle.currentState == CREATED) 收场
+}
+```
+`CREATED` 是关键：展开那次 `onStop` 根本不会来；而"按 Home 退到后台"虽然也落到 CREATED，
+但它没触发过 PiP 回调（`pipExited == false`），所以被排除 —— 那正是后台播放要保留的场景。
+
+**2. 单 Activity → PiP 缩的是整个窗口，不是播放页。**
+所以必须在根上把状态传下去，播放页在 `inPipMode` 时只画画面。
+**不要把界面写成两个分支**（PiP 一个 `PlaybackSurface`、正常一个 `PlayerScaffold`）：
+两个不同的调用点会让 `AndroidView` 重建、`SurfaceView` 重挂（与「全屏与竖屏共用一棵树」同一个理由）。
+正确做法是**复用 `PlayerScaffold`**，只把 `isFullscreen` 置真、overlay 内容不画。
+
+**3. 进小窗不退栈 → 必须有退出口。**
+PiP 的语义是"退到后台但仍可见"，所以进小窗时不能 pop（展开要回到播放页）。
+代价是用户被锁在播放页里。出口用"暂停态不进小窗"：暂停 = 用户已经停下来了，
+按返回就该正常退栈。这一条同时让「在播→小窗」与「暂停→退栈」变成同一句话。
+
+**4. `autoEnterEnabled` 要和返回键用同一条判据。**
+只按"在播放页"置真会出现「暂停着按 Home 冒小窗、而按返回不冒」，同一件事两个结果。
+另外 `supportsPictureInPicture="true"` 之外，`configChanges` **必须加 `smallestScreenSize`** ——
+进出小窗是一次屏幕尺寸变化，不接管就会重建 Activity，播放页与画面槽全部重来。
+
+### 应用内小窗 vs 系统 PiP：分工与踩过的坑（2026-09-29 三轮定稿）
+
+**分工**（`PlayerScreen` / `MiniPlayer` / `PlayerPip`）：
+
+| 动作 | 开关**关**（默认） | 开关**开** |
+|---|---|---|
+| 返回键 | 退栈回 App 内上一页 + 落进度 + 暂停 | 退栈回 App 内上一页 + **应用内小窗**继续放 |
+| 按 Home / 切 App | 退到后台，声音继续（通知栏可控） | **系统 PiP** |
+
+两种情况下返回都**不会**退到手机桌面。
+
+**⚠️ 开关（`PlaybackSettings.pictureInPicture`）管的是"退出播放页要不要继续放"，不是只管按 Home。**
+四轮才收敛到这一句：二轮把它定义成"退出播放页要不要小窗"，三轮我为修"返回退到桌面"
+把返回改成无条件进应用内小窗、开关挪去只管 Home —— 四轮高城立刻回了一句
+**「画中画，设置[里]关了，但是还在啊」**。教训：**修一个通路时别把另一个通路的语义悄悄挪走**，
+用户脑子里的模型（开关 = 退出播放页要不要继续放）比我的实现分层更稳定。
+
+**为什么不能把返回键接到系统 PiP**（第一版的错）：进 PiP 缩的是**整个 Activity**，
+而 Activity 已不在前台 → 背后就是**手机桌面**。用户按一下返回，看到的是"我出了 App，
+只剩一块小窗浮在桌面上"。高城一句否掉：**「就算是画中画，也不应该直接返回桌面」**。
+一句话记住：**PiP 表达的是"离开 App 但还看得见"，不是"离开这个页面"。**
+
+**坑 1：内核只有一个画面出口。** 同一时刻只能有一个 `PlayerView` 绑着那个 `MediaController`。
+所以：① 小窗显示条件里必须有"**当前不在播放页**"；② 从小窗回播放页要
+**先 `hideMiniPlayer()` 再 `navigate`**，否则导航那一帧两个 PlayerView 抢同一个 surface。
+
+**坑 2：`PipAutoEnterEffect` 不能挂在导航宿主上。**
+`BeeNavHost` 全程只组合一次（切 tab 不重建），`remember { settings.pictureInPicture }`
+会一直拿着**进设置页改之前**那个值。挂在**播放页**与**应用内小窗**里各一次：
+两处互斥（同一时刻只有一个在组合里），所以 `onDispose` 里的 `autoEnter=false` 不会互相打架，
+而 `remember` 每次进页面都是新的。
+
+**坑 3：小窗是浮层，它盖住的地方滚不动。**
+实测在设置页用 `input swipe` 从屏幕中下部起手，一直滚不动 —— 起点落在小窗上了。
+验证脚本要注意（从左侧空白处起手）。
+
+**坑 4：返回键的"退栈"与"退栈后画面归谁"是两件事。**
+`leavePlayer` 做三件：`onBack()` 永远执行；开关开着 `showMiniPlayer()`；
+开关关着 `hideMiniPlayer() + pauseAndSave()`。
+**不要**在这里调 `enterPictureInPictureMode`（那就是"被踢到桌面"）。
+
+**坑 5：开关关掉时小窗会消失，但播放不会自己停。**
+小窗的显示条件含 `pipEnabled`，所以拨到 false 那一刻窗口就没了 —— 而内核照旧在放，
+于是又变回"画面没了、声音还在响"。导航宿主里补一句
+`LaunchedEffect(pipEnabled) { if (!pipEnabled) pauseForExit() }`。
+它是空操作安全的：没有持有者时 `pauseForExit` 直接返回，所以 App 启动时（默认 false）不会误停。
+
+**5. "画中画"开关默认关，而它管的是"退出播放页要不要继续放"（两条通路一起）。**
+关着：返回 = 暂停 + 退栈；按 Home = 退到后台、声音继续（通知栏可控）。
+开着：返回 = 应用内小窗；按 Home = 系统 PiP。
+为啥要 Flow：它必须**当场**生效 —— 播放页与小窗都挂着一个"退到后台自动进系统小窗"的开关，
+设置页拨完不重新进页面也得跟着变，否则症状就是"开关关了，小窗还在"。
+它是**全项目唯一做成 `StateFlow` 的设置**，理由是别项都在"下次起播 / 下次进页面"被读到就够了。
+`shouldAutoEnterPip` 只认 Playing/Buffering，是为了不打扰：用户已经停下来了，别再冒一块窗口出来。
+实现上第二个参数是**用户开关 && 设备能力**，不要拆成两个参 ——
+拆了调用点就要写 `a && b &&`，判据就没法只在纯函数里钉住。
+
+## 从 MEMORY.md 卸载的细节（2026-09-29 二次压缩：MEMORY 超 12000 字节）
+
+判据仍留在 MEMORY，这里存细节与文件位置。
+
+### 播放器文件位置
+- `player/`：`MediaCache.kt`、`PlayerFactory.kt`、`PlaybackService.kt`、`PlayCommand.kt`、`DecoderUsage.kt`
+- `ui/player/`：`PlayerPlaybackState.kt`、`PlaybackCoordinator.kt`、`PlayerControls.kt`、`PlayerGestureLayer.kt`、`PlayerScaffold.kt`、`MiniPlayer.kt`、`PlayerPip.kt`
+
+### 退播放页两条通路（§分工原文见上「小窗 / PiP」节）
+- ① 返回键：`leavePlayer()` = `coordinator.showMiniPlayer()` + `onBack()`；画面交给应用内小窗
+  （`ui/player/MiniPlayer.kt`，右下角悬浮 208dp，带实时画面 / ▶⏸ / ✕ / 标题行）。
+- ② Home / 切 App：只有设置里开了 `PlaybackSettings.pictureInPicture`（**默认关**）才走系统 PiP。
+- ⚠️ 历史事故：曾把返回键接到系统 PiP → 用户按返回被踢到桌面，高城当场否掉。别再合回去。
+- 小窗按钮 32dp、底色 `PlayerSurface.copy(alpha = .6f)` + 白图标，**不走主题角色色**（同 `PlayerControls`）。
+- `PipAutoEnterEffect`（退到后台自动进系统小窗）只在**播放页**与**小窗**两处调：
+  二者互斥，所以 onDispose 不会打架；**别提到 `BeeNavHost`** —— 那里只组合一次，
+  `remember` 拿到的是进入时的旧值。
+
+### 系统 PiP 关闭判定的实测结论
+关小窗 = 落进度 + 暂停。判定**不能靠 `onStop` 与 PiP 回调的先后**（系统没保证）：
+实测关小窗时**任务还在**（Activity 只是被移到后台），`onTaskRemoved` 也不触发。
+→ 用 `postDelayed` 后在 `lifecycle == CREATED` 时判。
+`supportsPictureInPicture="true"` + `configChanges` **必须带 `smallestScreenSize`**，否则进出小窗会重建 Activity。
+
+### `MediaSession.ConnectionResult.AcceptedResultBuilder()` 无参
+无参构造给的是 `EMPTY`/`EMPTY`（不是「默认集」）。session 与 player 两条命令**必须各设一次**；
+漏掉 player 命令 = 静默丢弃 `setVideoSurface` / 位置 / 暂停 / seek
+→ 症状：**有声音、画面全黑、控件全哑、进度不落库**，且零日志。
+
+### 控制层自绘与全屏
+- `useController = false` 是前提；控制层显隐由外部传参；颜色**不走主题角色色**。
+- 全屏布局判据是**真实 `orientation`**，不是点击意图（`requestedOrientation` 异步几百 ms）；
+  意图只驱动转向 / 返回键 / 按钮图标。
+- 全屏与竖屏**共用一棵组合树**；全屏 `contentWindowInsets` 给 0，**不能挂 `verticalScroll`**。
+- 横屏退出必须显式设回 `SCREEN_ORIENTATION_PORTRAIT`；亮度只改 `window.attributes`，**不写 `Settings.System`**。
+
+### 内容源 / 配置地址（细节全在同名节，这里只留索引）
+见上文「# 内容源 / 配置地址体检（2026-09-27）」：jsdelivr 拒发 `*.jar`、md5 vs 实内容、
+`csp_` 命中率、`dianshi.json`/`jsm.json` native 崩、`0821.json` md5 ✘ / `fty.json` 修好版、
+片单站 `detailContent` 返空（`detail_not_found`）。工具 `probe_config.py`。
+
+### 真机调试工具链
+见上文「## 6. 真机调试工具链（2026-09-27 补充）」：`ui_dump.py` / `ui_text.py` / `ui_pick.py` / `ui_tap.py`；
+**dump 完先删远端 xml**；**屏外项 bounds 全是 `[0,0][0,0]`** → 先 swipe 滚进可视区；
+**验拖拽只能单次 `input swipe`**。
+
+### 许可与 UI 小陷阱（2026-09-29 二次压缩迁自 MEMORY）
+- `TV-Multiplatform-main` / `FongMi/TV` 都是 **GPL-3.0**：只作行为规格；**抄源码 = 整体开源**。
+  例外：JS 引擎是拍板「逐行翻译」的衍生；**要改回自研先问高城**。
+- `Card` 的 content 是 `@Composable ColumnScope.() -> Unit`；
+  `combinedClickable` 带 `indication` 时必须同时给 `interactionSource`。
+- 设置页【关于】= 四行入口（关于 / 更新日志 / 开源许可 / 免责声明），全是**静态文案**
+  （`ui/settings/AboutSection.kt`）。**不做在线检查更新**；改版要同步 `LATEST_RELEASE`
+  与 `strings.xml` 的 `settings_about_changelog_body`。
