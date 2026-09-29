@@ -1261,6 +1261,37 @@ PiP 的语义是"退到后台但仍可见"，所以进小窗时不能 pop（展�
 实现上第二个参数是**用户开关 && 设备能力**，不要拆成两个参 ——
 拆了调用点就要写 `a && b &&`，判据就没法只在纯函数里钉住。
 
+## R8 差分脚本：1b 段曾漏掉「合成成员」例外（2026-09-29 发布 v1.3.0 时踩出）
+
+**症状**：ci.yml 的 R8 差分校验红在
+
+```
+── 1b. 第三方库 ABI 差分（okhttp3 / okio / gson）──
+    ❌ 成员没了: okhttp3/internal/Util$$ExternalSyntheticLambda0.<init>(Lokhttp3/EventListener;)V
+```
+
+第一反应是"这次改动把 okhttp3 的某个成员削掉了"——**不是**。
+
+**真因**：脚本里 `is_synthetic_member()`（把 lambda 去糖产物与空 `<clinit>` 归为已知例外）
+**只被 1d（QuickJS）与 2c（JS 锚点）用了**，1b 那段是自己手写的、只过滤 `<clinit>` 的版本。
+于是合成成员在 1b 里一律算 ❌。
+
+那个成员为什么会消失：`okhttp3.internal.Util` 里捕获 `EventListener` 的 lambda 被 R8
+**内联回调用方**（optimization 阶段的事，`-printusage` 不报告），承载它的合成类随之不存在。
+**行为不变** —— 它是 lambda 的另一种编法，不是"A 功能没了"。
+
+⚠️ **也没法用 keep 规则堵**：合成类名是去糖阶段的产物，`-keep class okhttp3.** { *; }`
+匹配的是**输入**里的类，而这个类在输入里根本不存在（输入里是 `invokedynamic`）。
+所以唯一的解法是修判据，不是加规则。
+
+**修法**：1b 与 1d / 2c 对齐，改用同一个 `is_synthetic_member()`。
+
+⚠️ **这不削弱真正的保护**：会炸的是**非合成**成员（`okhttp3.ConnectionPool.<init>` /
+`Request$Builder.url` / `OkHttpClient.newCall`，见 `proguard-rules.pro` §4 的事故记录），
+它们既留在差集里、也被 1c 点名锚着。改完实测这四个判据仍然返回 False（仍会 ❌）。
+判据写错的方向性结论：**改判据之前先把"应该继续报错"的样本跑一遍**，
+否则你只是把门关了 —— 顺带一提，`okio.internal._ZlibJvmKt.<clinit>` 那条原样保留。
+
 ## 从 MEMORY.md 卸载的细节（2026-09-29 二次压缩：MEMORY 超 12000 字节）
 
 判据仍留在 MEMORY，这里存细节与文件位置。
