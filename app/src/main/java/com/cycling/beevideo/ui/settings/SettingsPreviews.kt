@@ -28,6 +28,8 @@ private fun SettingsScreenPreview() {
                 cache = FakeMediaCache(usage = 1_288_490_188L),
                 themeMode = ThemeMode.SYSTEM,
                 onThemeModeChange = {},
+                incognito = false,
+                onIncognitoChange = {},
             )
         }
     }
@@ -51,6 +53,8 @@ private fun SettingsScreenLightPreview() {
                 cache = FakeMediaCache(usage = 1_288_490_188L),
                 themeMode = ThemeMode.LIGHT,
                 onThemeModeChange = {},
+                incognito = false,
+                onIncognitoChange = {},
             )
         }
     }
@@ -75,6 +79,34 @@ private fun SettingsScreenManySourcesPreview() {
                 cache = FakeMediaCache(usage = 1_288_490_188L),
                 themeMode = ThemeMode.SYSTEM,
                 onThemeModeChange = {},
+                incognito = false,
+                onIncognitoChange = {},
+            )
+        }
+    }
+}
+
+/** 无痕开启：开关亮着，下面那句"关掉时会删掉什么"是这个模式最需要说清的一句话。 */
+@Preview(
+    name = "设置 · 手机 · 无痕开启",
+    group = "页面",
+    showBackground = true,
+    backgroundColor = 0xFF0B0A08,
+    widthDp = 411,
+    heightDp = 891,
+)
+@Composable
+private fun SettingsScreenIncognitoPreview() {
+    BeeVideoTheme(darkTheme = true) {
+        PreviewViewModelStoreOwner {
+            SettingsScreen(
+                sources = FakeSourceRepository.threeSourcesReady(),
+                settings = FakePlaybackSettings(),
+                cache = FakeMediaCache(usage = 1_288_490_188L),
+                themeMode = ThemeMode.SYSTEM,
+                onThemeModeChange = {},
+                incognito = true,
+                onIncognitoChange = {},
             )
         }
     }

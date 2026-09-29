@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -128,6 +129,17 @@ fun HistoryScreen(
                         top = BeeDimens.gapSmall,
                     )
                     .skeletonSemantics(stringResource(R.string.history_loading)),
+            )
+
+            /**
+             * 无痕会话下这一页**必然**是空的，但不能说"还没有观看记录" —— 那是在告诉
+             * 用户"你没看过"。同样是空列表，两句话说的是两件事。
+             */
+            uiState.incognito -> BeeEmptyState(
+                icon = Icons.Outlined.VisibilityOff,
+                title = stringResource(R.string.history_incognito_title),
+                body = stringResource(R.string.history_incognito_body),
+                modifier = bodyModifier,
             )
 
             uiState.records.isEmpty() -> BeeEmptyState(
@@ -346,6 +358,25 @@ private fun HistoryScreenPreview() {
 private fun HistoryScreenEmptyPreview() {
     BeeVideoTheme(darkTheme = true) {
         HistoryScreen(uiState = HistoryUiState(loading = false), onIntent = {})
+    }
+}
+
+/** 无痕会话下的空态：同样是空列表，说的却是另一件事 —— 所以它需要单独一稿。 */
+@Preview(
+    name = "历史 · 无痕空态",
+    group = "页面",
+    showBackground = true,
+    backgroundColor = 0xFF0B0A08,
+    widthDp = 411,
+    heightDp = 891,
+)
+@Composable
+private fun HistoryScreenIncognitoPreview() {
+    BeeVideoTheme(darkTheme = true) {
+        HistoryScreen(
+            uiState = HistoryUiState(loading = false, incognito = true),
+            onIntent = {},
+        )
     }
 }
 

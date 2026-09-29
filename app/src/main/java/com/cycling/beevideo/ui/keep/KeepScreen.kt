@@ -8,9 +8,14 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
@@ -18,6 +23,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -51,6 +60,8 @@ fun KeepScreen(
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
         state = rememberTopAppBarState(),
     )
+    // 长按菜单锚在哪一张卡上。与历史页同一种做法
+    var menuFor by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -106,6 +117,21 @@ fun KeepScreen(
                         score = item.score,
                         remarks = item.remarks,
                         onClick = { onIntent(KeepIntent.OnOpenVod(item.vodId)) },
+                        onLongClick = { menuFor = item.vodId },
+                        menu = {
+                            KeepMenu(
+                                expanded = menuFor == item.vodId,
+                                onDismiss = { menuFor = null },
+                                onOpenDetail = {
+                                    menuFor = null
+                                    onIntent(KeepIntent.OnOpenVod(item.vodId))
+                                },
+                                onRemove = {
+                                    menuFor = null
+                                    onIntent(KeepIntent.OnRemoveKeep(item.vodId))
+                                },
+                            )
+                        },
                     )
                 }
             }
@@ -122,6 +148,33 @@ private fun KeepEmptyState(modifier: Modifier = Modifier) {
         body = stringResource(R.string.keep_empty_body),
         modifier = modifier,
     )
+}
+
+/**
+ * 长按菜单。
+ *
+ * 「取消收藏」不问二次确认：它是可逆的（再收一次即可），而历史页的单条删除同样不确认
+ * —— 只有"清空"那类不可撤销的动作才拦一道。
+ */
+@Composable
+private fun KeepMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onOpenDetail: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.keep_menu_detail)) },
+            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+            onClick = onOpenDetail,
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.keep_menu_remove)) },
+            leadingIcon = { Icon(Icons.Filled.Bookmark, contentDescription = null) },
+            onClick = onRemove,
+        )
+    }
 }
 
 // ------------------------------------------------------------------ 预览

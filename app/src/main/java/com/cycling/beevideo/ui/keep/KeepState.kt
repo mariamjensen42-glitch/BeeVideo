@@ -12,7 +12,7 @@ import kotlinx.coroutines.launch
  * 靠 Flow 那张卡才会立刻消失，不需要下拉刷新。
  */
 class KeepState(
-    library: LibraryRepository,
+    private val library: LibraryRepository,
     scope: CoroutineScope,
 ) : MviState<KeepUiState, KeepIntent, KeepEffect>(KeepUiState(), scope) {
 
@@ -28,6 +28,9 @@ class KeepState(
     override fun onIntent(intent: KeepIntent) {
         when (intent) {
             is KeepIntent.OnOpenVod -> sendEffect(KeepEffect.OpenVod(intent.vodId))
+
+            // 不在这里改列表：`keeps` 是 Flow，删完库自己会重发一帧
+            is KeepIntent.OnRemoveKeep -> scope.launch { library.removeKeep(intent.vodId) }
         }
     }
 }

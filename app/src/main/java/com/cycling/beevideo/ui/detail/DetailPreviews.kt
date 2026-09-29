@@ -41,6 +41,7 @@ private fun DetailScreenPreview() {
                 content = previewContent,
                 library = previewLibraryWithProgress,
                 vodId = "v01",
+                keepEnabled = true,
                 onBack = {},
                 onPlay = { _, _ -> },
             )
@@ -64,6 +65,7 @@ private fun DetailScreenNotFoundPreview() {
                 content = previewContent,
                 library = FakeLibraryRepository(),
                 vodId = "not-exist",
+                keepEnabled = true,
                 onBack = {},
                 onPlay = { _, _ -> },
             )
@@ -86,8 +88,39 @@ private fun DetailScreenLightPreview() {
             content = previewContent,
             library = previewLibraryWithProgress,
             vodId = "v01",
+            keepEnabled = true,
             onBack = {},
             onPlay = { _, _ -> },
         )
+    }
+}
+
+/**
+ * 无痕会话：收藏按钮是禁用态（灰掉的书签）。
+ *
+ * 这一稿刻意配**空**的仓储：无痕下 `isKept` 恒为 false、续播位置也不给，
+ * 用带进度的那份假数据来看会与真实行为对不上。
+ */
+@Preview(
+    name = "详情 · 无痕（收藏停用）",
+    group = "页面",
+    showBackground = true,
+    backgroundColor = 0xFF0B0A08,
+    widthDp = 411,
+    heightDp = 891,
+)
+@Composable
+private fun DetailScreenIncognitoPreview() {
+    BeeVideoTheme(darkTheme = true) {
+        PreviewViewModelStoreOwner {
+            DetailScreen(
+                content = previewContent,
+                library = FakeLibraryRepository(),
+                vodId = "v01",
+                keepEnabled = false,
+                onBack = {},
+                onPlay = { _, _ -> },
+            )
+        }
     }
 }

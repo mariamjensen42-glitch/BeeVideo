@@ -67,4 +67,12 @@ interface LibraryRepository {
      * 就是竞态（连点两下会两条都写进去）。
      */
     suspend fun toggleKeep(item: KeepItem): Boolean
+
+    /**
+     * 取消收藏。不存在时无操作。
+     *
+     * 与 [toggleKeep] 并存的理由：详情页那颗书签是"翻转"，而收藏页的菜单项是"移除"——
+     * 后者**不该依赖当前状态**，状态不同步时翻转会把条目又加回去。
+     */
+    suspend fun removeKeep(vodId: String)
 }

@@ -16,6 +16,13 @@ data class HistoryUiState(
     val keptIds: Set<String> = emptySet(),
     /** 站点 key（vodId 的前缀）→ 给人看的来源名。换不到就不显示那一段。 */
     val sourceNames: Map<String, String> = emptyMap(),
+    /**
+     * 无痕会话开着。
+     *
+     * 光靠 `records` 为空不足以换文案：空列表既能是"没看过"，也能是"这次不让记"，
+     * 而这两句话完全不同（见 [HistoryScreen] 的空态）。
+     */
+    val incognito: Boolean = false,
 )
 
 sealed interface HistoryIntent {

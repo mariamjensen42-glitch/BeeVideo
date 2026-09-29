@@ -44,9 +44,11 @@ import androidx.navigation.navArgument
 import com.cycling.beevideo.R
 import com.cycling.beevideo.domain.repository.ContentRepository
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.domain.repository.MediaCache
 import com.cycling.beevideo.domain.repository.PlaybackSettings
+import com.cycling.beevideo.domain.repository.SearchHistoryRepository
 import com.cycling.beevideo.domain.repository.ThemeSettings
 import com.cycling.beevideo.ui.detail.DetailScreen
 import com.cycling.beevideo.ui.history.HistoryRoute
@@ -116,9 +118,11 @@ fun BeeNavHost(
     content: ContentRepository,
     sources: ContentSourceRepository,
     library: LibraryRepository,
+    searchHistory: SearchHistoryRepository,
     settings: PlaybackSettings,
     mediaCache: MediaCache,
     theme: ThemeSettings,
+    incognito: IncognitoMode,
     navController: NavHostController = rememberNavController(),
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -222,12 +226,16 @@ fun BeeNavHost(
                 // 设置页只收一个值和一支回调。这里读到的 mode 与 MainActivity 是同一条流，
                 // 点一下 → set() 写流 → 顶层换配色 → 本页重组拿到新选中态，不用乐观更新
                 val mode by theme.mode.collectAsStateWithLifecycle()
+                // 无痕同理：本页只拨开关，状态的真身在 App 级那条流上
+                val incognitoOn by incognito.enabled.collectAsStateWithLifecycle()
                 SettingsScreen(
                     sources = sources,
                     settings = settings,
                     cache = mediaCache,
                     themeMode = mode,
                     onThemeModeChange = theme::set,
+                    incognito = incognitoOn,
+                    onIncognitoChange = incognito::set,
                 )
             }
 
@@ -236,6 +244,7 @@ fun BeeNavHost(
             composable(Routes.SEARCH) {
                 SearchRoute(
                     content = content,
+                    history = searchHistory,
                     onVodClick = { vod -> navController.navigate(Routes.detail(vod.id)) },
                     onBack = { navController.popBackStack() },
                 )
@@ -245,6 +254,7 @@ fun BeeNavHost(
                 HistoryRoute(
                     library = library,
                     sources = sources,
+                    incognito = incognito,
                     onBack = { navController.popBackStack() },
                     onContinue = { progress ->
                         navController.navigate(
@@ -261,10 +271,14 @@ fun BeeNavHost(
             ) { entry ->
                 // 已解码，别再加 Uri.decode
                 val vodId = entry.arguments?.getString("vodId").orEmpty()
+                // 无痕状态在这里读：它只决定收藏按钮按不按得动，
+                // 记录本身早就被仓储那条流换成了空的
+                val incognitoOn by incognito.enabled.collectAsStateWithLifecycle()
                 DetailScreen(
                     content = content,
                     library = library,
                     vodId = vodId,
+                    keepEnabled = !incognitoOn,
                     onBack = { navController.popBackStack() },
                     onPlay = { lineIndex, episodeIndex ->
                         navController.navigate(Routes.player(vodId, lineIndex, episodeIndex))
@@ -287,6 +301,7 @@ fun BeeNavHost(
                     content = content,
                     library = library,
                     settings = settings,
+                    incognito = incognito,
                     vodId = vodId,
                     lineIndex = lineIndex,
                     episodeIndex = episodeIndex,

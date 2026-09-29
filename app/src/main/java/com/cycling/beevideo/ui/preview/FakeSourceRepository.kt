@@ -32,6 +32,10 @@ class FakeSourceRepository(status: SourceStatus) : ContentSourceRepository {
 
     override fun selectSource(sourceId: String) = Unit
 
+    override fun setSourceExcluded(sourceId: String, excluded: Boolean) = Unit
+
+    override fun togglePinSource(sourceId: String) = Unit
+
     override suspend fun clear() = Unit
 
     companion object {
@@ -78,6 +82,9 @@ class FakeSourceRepository(status: SourceStatus) : ContentSourceRepository {
                 // 选中项刻意不取首尾：看首尾圆角有没有串到中间项上
                 activeSourceId = PreviewSites.many[7].id,
                 message = "共 ${PreviewSites.many.size} 个来源",
+                // 带一个排除项与一个置顶项：预览里要能看见删除线，菜单文案也才是另一种
+                excludedSourceIds = setOf(PreviewSites.many[2].id),
+                pinnedSourceIds = listOf(PreviewSites.many[7].id),
             )
         )
     }

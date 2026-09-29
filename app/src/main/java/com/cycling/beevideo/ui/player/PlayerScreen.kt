@@ -22,10 +22,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.cycling.beevideo.R
-import com.cycling.beevideo.domain.model.PlaybackFailure
 import com.cycling.beevideo.domain.model.PlaybackState
 import com.cycling.beevideo.domain.model.resumePositionMs
 import com.cycling.beevideo.domain.repository.ContentRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.domain.repository.PlaybackSettings
 import com.cycling.beevideo.player.Media3PlaybackSession
@@ -40,12 +40,16 @@ fun PlayerScreen(
     content: ContentRepository,
     library: LibraryRepository,
     settings: PlaybackSettings,
+    incognito: IncognitoMode,
     vodId: String,
     lineIndex: Int,
     episodeIndex: Int,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+
+    // 进页面时读一次：缓存目录建好之后改不了，与配额同样的取舍（见本页工厂里的说明）
+    val incognitoNow by incognito.enabled.collectAsStateWithLifecycle()
 
     // 会话必须住 ViewModel：主题切换会重建 Activity，住 remember 里集号会退回路由参数
     val viewModel: PlayerViewModel = viewModel(
@@ -57,6 +61,8 @@ fun PlayerScreen(
                         context = context.applicationContext,
                         // 配额建好之后改不了，只在进页面时读一次
                         quotaBytes = if (settings.cacheEnabled) settings.cacheQuotaBytes else 0L,
+                        // 无痕期间写独立缓存目录，退出无痕时整个删掉
+                        incognito = incognitoNow,
                     ),
                     library = library,
                     vodId = vodId,
@@ -139,23 +145,6 @@ fun PlayerScreen(
 
     val systemControls = rememberPlayerSystemControls()
 
-    var showInfo by rememberSaveable { mutableStateOf(false) }
-
-    val statusText = when {
-        detailState is LoadState.Failed ->
-            stringResource(R.string.detail_load_failed, detailState.message)
-
-        targetState is LoadState.Loading -> stringResource(R.string.player_resolving)
-        targetState is LoadState.Failed ->
-            stringResource(R.string.player_resolve_failed, targetState.message)
-
-        target == null -> stringResource(R.string.player_resolve_empty)
-        currentState is PlaybackState.Failed -> failedPlaybackText(currentState)
-        currentState is PlaybackState.Buffering -> stringResource(R.string.player_state_buffering)
-        currentState is PlaybackState.Ended -> stringResource(R.string.player_state_ended)
-        else -> stringResource(R.string.player_state_ready)
-    }
-
     PlayerScaffold(
         state = PlayerUiState(
             title = vod?.name ?: stringResource(R.string.player_fallback_title),
@@ -165,16 +154,12 @@ fun PlayerScreen(
             currentLineIndex = playback.lineIndex,
             episodes = episodes,
             currentIndex = safeIndex,
-            statusText = statusText,
-            urlText = target?.url ?: stringResource(R.string.player_url_placeholder),
-            isBuffering = currentState is PlaybackState.Buffering,
         ),
         onSelectLine = playback::selectLine,
         onSelectEpisode = playback::selectEpisode,
         onPrev = { if (safeIndex > 0) playback.selectEpisode(safeIndex - 1) },
         onNext = { if (safeIndex < episodes.lastIndex) playback.selectEpisode(safeIndex + 1) },
         onBack = onBack,
-        onInfoClick = { showInfo = true },
         isFullscreen = isLandscape,
         player = { modifier ->
             PlaybackSurface(
@@ -212,21 +197,4 @@ fun PlayerScreen(
         },
     )
 
-    if (showInfo) {
-        PlayInfoDialog(
-            title = stringResource(R.string.player_info_title),
-            lineName = line?.name.orEmpty(),
-            episodeName = current?.name.orEmpty(),
-            url = target?.url.orEmpty(),
-            state = statusText,
-            onDismiss = { showInfo = false },
-        )
-    }
-}
-
-@Composable
-private fun failedPlaybackText(failed: PlaybackState.Failed): String = when (failed.reason) {
-    PlaybackFailure.NoAddress -> stringResource(R.string.player_resolve_empty)
-    PlaybackFailure.RequiresExternalParser -> stringResource(R.string.player_parse_required)
-    PlaybackFailure.Kernel -> stringResource(R.string.player_error, failed.detail.orEmpty())
 }

@@ -9,6 +9,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.cycling.beevideo.domain.model.PlayProgress
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 
 /**
@@ -21,13 +22,14 @@ import com.cycling.beevideo.domain.repository.LibraryRepository
 fun HistoryRoute(
     library: LibraryRepository,
     sources: ContentSourceRepository,
+    incognito: IncognitoMode,
     onBack: () -> Unit,
     onContinue: (PlayProgress) -> Unit,
     onOpenDetail: (String) -> Unit,
 ) {
     val viewModel: HistoryViewModel = viewModel(
         factory = viewModelFactory {
-            initializer { HistoryViewModel(library, sources) }
+            initializer { HistoryViewModel(library, sources, incognito) }
         },
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()

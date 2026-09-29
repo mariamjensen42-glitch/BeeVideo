@@ -21,6 +21,9 @@ data class KeepUiState(
 sealed interface KeepIntent {
     /** 点一张卡。进详情是**导航** —— 一次性事件，由 [KeepEffect] 承载。 */
     data class OnOpenVod(val vodId: String) : KeepIntent
+
+    /** 长按菜单里的「取消收藏」。 */
+    data class OnRemoveKeep(val vodId: String) : KeepIntent
 }
 
 /**

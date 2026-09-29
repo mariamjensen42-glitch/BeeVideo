@@ -18,6 +18,17 @@ interface SourceStore {
     /** 上次选中的来源 id */
     var activeSourceId: String
 
+    /**
+     * 设成「不参与搜索」的来源 id。
+     *
+     * ⚠️ 与配置**同生共死**：换一份配置后站点 key 会变，而且不同配置里的 key 会撞名
+     * （见 `VodContentRepository` 的注释），所以装载新配置时这几个偏好一起清掉。
+     */
+    var excludedSourceIds: Set<String>
+
+    /** 置顶的来源 id，靠前的排在最前。 */
+    var sourceOrder: List<String>
+
     /** 清空全部记录。 */
     fun clear()
 }
@@ -44,6 +55,20 @@ class ContentSourceStore(context: Context) : SourceStore {
         get() = prefs.getString(KEY_ACTIVE_SOURCE, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_ACTIVE_SOURCE, value).apply()
 
+    /** ⚠️ `toSet()` 不能省：`getStringSet` 返回的是 prefs 内部那个实例，改它会绕过落盘。 */
+    override var excludedSourceIds: Set<String>
+        get() = prefs.getStringSet(KEY_EXCLUDED, emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit().putStringSet(KEY_EXCLUDED, value).apply()
+
+    /** 站点 key 里不会出现换行，所以拿它当分隔符是安全的。 */
+    override var sourceOrder: List<String>
+        get() = prefs.getString(KEY_ORDER, "").orEmpty()
+            .split(SEPARATOR)
+            .filter { it.isNotBlank() }
+        set(value) = prefs.edit()
+            .putString(KEY_ORDER, value.joinToString(SEPARATOR))
+            .apply()
+
     override fun clear() {
         prefs.edit().clear().apply()
     }
@@ -52,5 +77,8 @@ class ContentSourceStore(context: Context) : SourceStore {
         const val PREFS_NAME = "beevideo.content_source"
         const val KEY_CONFIG_URL = "config_url"
         const val KEY_ACTIVE_SOURCE = "active_source_id"
+        const val KEY_EXCLUDED = "excluded_source_ids"
+        const val KEY_ORDER = "source_order"
+        const val SEPARATOR = "\n"
     }
 }

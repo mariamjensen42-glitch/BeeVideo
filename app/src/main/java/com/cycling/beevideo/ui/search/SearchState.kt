@@ -1,6 +1,7 @@
 package com.cycling.beevideo.ui.search
 
 import com.cycling.beevideo.domain.repository.ContentRepository
+import com.cycling.beevideo.domain.repository.SearchHistoryRepository
 import com.cycling.beevideo.ui.components.LoadState
 import com.cycling.beevideo.ui.mvi.MviState
 import kotlin.coroutines.cancellation.CancellationException
@@ -16,10 +17,19 @@ import kotlinx.coroutines.launch
  */
 class SearchState(
     private val content: ContentRepository,
+    private val history: SearchHistoryRepository,
     scope: CoroutineScope,
 ) : MviState<SearchUiState, SearchIntent, SearchEffect>(SearchUiState(), scope) {
 
     private var searchJob: Job? = null
+
+    init {
+        // 历史从别的实例改了也要跟（切主题重建 Activity 会换一个 ViewModel，
+        // 但仓储是 App 级那一份），所以订阅而不是读一次
+        scope.launch {
+            history.keywords.collect { list -> setState { it.copy(history = list) } }
+        }
+    }
 
     override fun onIntent(intent: SearchIntent) {
         when (intent) {
@@ -28,6 +38,16 @@ class SearchState(
             SearchIntent.OnClearInput -> setState { it.copy(input = "") }
 
             SearchIntent.OnSubmit -> submit()
+
+            // 先把词填进输入框再提交：结果有了而输入框空着，用户会以为是上次的残留
+            is SearchIntent.OnUseHistory -> {
+                setState { it.copy(input = intent.keyword) }
+                submit()
+            }
+
+            is SearchIntent.OnRemoveHistory -> history.remove(intent.keyword)
+
+            SearchIntent.OnClearHistory -> history.clear()
 
             is SearchIntent.OnOpenVod -> sendEffect(SearchEffect.OpenVod(intent.vod))
 
@@ -38,6 +58,10 @@ class SearchState(
     private fun submit() {
         val keyword = currentState.input.trim()
         if (keyword.isEmpty()) return
+
+        // 先记账再发请求：历史记的是"我搜过什么"，不是"什么搜到了"。
+        // 网络失败不该让关键词消失（无痕下仓储自己会丢掉这次写入）
+        history.record(keyword)
 
         setState { it.copy(submitted = keyword, result = LoadState.Loading) }
         // 取消上一次：连点两下提交时，先发的那个可能后到，把新词的结果盖回旧的

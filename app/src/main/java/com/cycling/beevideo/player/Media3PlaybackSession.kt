@@ -32,10 +32,12 @@ class Media3PlaybackSession(
     /**
      * 便捷装配：按**配额**自己取那个进程内唯一的缓存实例。
      * 有它播放页才不用 `import MediaCacheProvider` 也能把会话建起来。
+     *
+     * @param incognito 无痕会话写独立目录（退出时整个删掉），见 `MediaCacheProvider`
      */
-    constructor(context: Context, quotaBytes: Long) : this(
+    constructor(context: Context, quotaBytes: Long, incognito: Boolean = false) : this(
         context = context,
-        cache = MediaCacheProvider.get(context, quotaBytes),
+        cache = MediaCacheProvider.get(context, quotaBytes, incognito),
     )
 
     private val exoPlayer: ExoPlayer = PlayerFactory.newPlayer(context).apply {

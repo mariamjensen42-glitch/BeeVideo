@@ -6,16 +6,21 @@ import coil.ImageLoaderFactory
 import com.cycling.beevideo.data.local.BeeDatabase
 import com.cycling.beevideo.data.repository.RoomLibraryRepository
 import com.cycling.beevideo.data.repository.VodContentRepository
+import com.cycling.beevideo.data.settings.PrefsIncognitoMode
 import com.cycling.beevideo.data.settings.PrefsPlaybackSettings
+import com.cycling.beevideo.data.settings.PrefsSearchHistoryRepository
 import com.cycling.beevideo.data.settings.PrefsThemeSettings
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.domain.repository.MediaCache
 import com.cycling.beevideo.domain.repository.PlaybackSettings
+import com.cycling.beevideo.domain.repository.SearchHistoryRepository
 import com.cycling.beevideo.domain.repository.ThemeSettings
 import com.cycling.beevideo.player.DiskMediaCache
 import com.cycling.beevideo.player.MediaCacheProvider
 import com.github.catvod.Init
 import com.github.catvod.utils.Notify
+import kotlin.concurrent.thread
 
 /**
  * App 级依赖的持有者。
@@ -35,7 +40,10 @@ import com.github.catvod.utils.Notify
  * 预热缓存。以前它是页面各自 new 的，于是"设置页改了配额、播放页还在用旧值"
  * 成了只能靠注释解释的事（见 `MediaCacheProvider`）。
  *
- * 就五个对象，不值得引入 DI 框架 —— 几个 `lateinit` 字段更好看懂，也更好定位问题。
+ * [incognito] 更极端：拨开关的在设置页，订阅它的却散在历史页、详情页、播放页与封面图里，
+ * 两份实例的后果是"拨了没反应"。它同时还要拦 [library] 的读写，所以**必须比它先建**。
+ *
+ * 就这几个对象，不值得引入 DI 框架 —— 几个 `lateinit` 字段更好看懂，也更好定位问题。
  */
 class BeeApplication : Application(), ImageLoaderFactory {
 
@@ -55,6 +63,37 @@ class BeeApplication : Application(), ImageLoaderFactory {
     lateinit var mediaCache: MediaCache
         private set
 
+    lateinit var incognito: IncognitoMode
+        private set
+
+    /**
+     * 搜索历史。
+     *
+     * 建在 [incognito] **之后** —— 它订阅无痕开关来决定记不记、看不看得见。
+     */
+    lateinit var searchHistory: SearchHistoryRepository
+        private set
+
+    /**
+     * 封面图的加载器（Coil 全局单例）。
+     *
+     * ⚠️ 关掉「尊重响应头的缓存指令」。海报图床里相当一部分发 `Cache-Control: no-cache`
+     * 或者压根不发，Coil 默认会因此**跳过磁盘缓存** —— 症状是来回滚动时同一张封面每次
+     * 都重新下载（实测缓存目录能到 1500+ 张，说明多数源能缓存，但漏网的那些最费流量）。
+     * 封面是静态图，时效性没有意义，一律按"看到过就不再走网络"处理。
+     *
+     * 内存缓存与磁盘缓存的默认值（可用内存的 25% / 250MB）都合适，不覆盖；写死数字
+     * 只会在换机型时变成新的调参对象。
+     *
+     * ⚠️ 做成字段而不是每次 [newImageLoader] 现建一个：退出无痕时要清内存缓存，
+     * 现建一个只会清到一个没人用过的实例。
+     */
+    private val coverLoader: ImageLoader by lazy {
+        ImageLoader.Builder(this)
+            .respectCacheHeaders(false)
+            .build()
+    }
+
     override fun onCreate() {
         super.onCreate()
         // 给 CatVod 兼容层的 Notify 接上 context：jar 里的 `Notify.show("…")` 要弹 Toast，
@@ -65,9 +104,28 @@ class BeeApplication : Application(), ImageLoaderFactory {
         // 它拿不到 Context，只能从全局取（见 com.github.catvod.Init）。
         Init.set(this)
         content = VodContentRepository(this)
+        /*
+         * 无痕开关必须**先于** library 建：仓储的读写拦截要订阅这条流。
+         *
+         * onExit 是"关掉无痕"的收尾，两件事都在后台线程做 —— 删目录要遍历上千个
+         * 分片文件，在主线程做就是一次看得见的卡顿。
+         * ⚠️ 释放无痕缓存实例要求没有播放器在读它；开关只在设置页，而播放页在另一条
+         * 栈上（得先退回来才够得着设置），所以那一刻是安全的（同 `clear` 的约定）。
+         */
+        incognito = PrefsIncognitoMode(this) {
+            // 先在调用线程取一次加载器（lazy 首次构建不该在后台线程里发生）
+            val loader = coverLoader
+            thread(name = "bee-incognito-exit", isDaemon = true) {
+                MediaCacheProvider.clearIncognito(this)
+                // 封面在无痕期间只进了内存缓存，这一段就是它的全部
+                loader.memoryCache?.clear()
+            }
+        }
         // 建库本身**不开文件**：Room 是惰性的，首次查询时才打开 SQLite 并跑迁移，
         // 所以放在 onCreate 里不会拖慢冷启动
-        library = RoomLibraryRepository(BeeDatabase.create(this))
+        library = RoomLibraryRepository(BeeDatabase.create(this), incognito)
+        // 只读一次 prefs 里的一个短字符串，构造开销可以忽略
+        searchHistory = PrefsSearchHistoryRepository(this, incognito)
         // 只读一次 prefs 里的一个短字符串，构造开销可以忽略。**只能有一份**（见类注释）
         theme = PrefsThemeSettings(this)
         // 同样只读两个值
@@ -84,18 +142,6 @@ class BeeApplication : Application(), ImageLoaderFactory {
         }
     }
 
-    /**
-     * 封面图的加载器（Coil 全局单例）。
-     *
-     * ⚠️ 关掉「尊重响应头的缓存指令」。海报图床里相当一部分发 `Cache-Control: no-cache`
-     * 或者压根不发，Coil 默认会因此**跳过磁盘缓存** —— 症状是来回滚动时同一张封面每次
-     * 都重新下载（实测缓存目录能到 1500+ 张，说明多数源能缓存，但漏网的那些最费流量）。
-     * 封面是静态图，时效性没有意义，一律按"看到过就不再走网络"处理。
-     *
-     * 内存缓存与磁盘缓存的默认值（可用内存的 25% / 250MB）都合适，不覆盖；写死数字
-     * 只会在换机型时变成新的调参对象。
-     */
-    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
-        .respectCacheHeaders(false)
-        .build()
+    /** 理由见 [coverLoader]：必须是同一个实例，不能现建。 */
+    override fun newImageLoader(): ImageLoader = coverLoader
 }

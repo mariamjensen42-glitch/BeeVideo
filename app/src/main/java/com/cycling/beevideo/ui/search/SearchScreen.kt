@@ -168,17 +168,26 @@ fun SearchScreen(
 
                     is LoadState.Ready -> {
                         val outcome = result.value
-                        if (outcome == null) {
-                            // 还没搜过
-                            BeeCenteredNotice(
-                                fillHeight = true,
-                                text = stringResource(R.string.search_hint),
-                            )
-                        } else {
-                            SearchResults(
+                        when {
+                            outcome != null -> SearchResults(
                                 outcome = outcome,
                                 keyword = uiState.submitted,
                                 onVodClick = { onIntent(SearchIntent.OnOpenVod(it)) },
+                            )
+
+                            // 有历史就铺历史。**没历史才给那句提示** —— 新用户看到的
+                            // 一个字节都没变，而老用户不必再读一遍怎么用
+                            uiState.history.isNotEmpty() -> SearchHistorySection(
+                                keywords = uiState.history,
+                                onUse = { onIntent(SearchIntent.OnUseHistory(it)) },
+                                onRemove = { onIntent(SearchIntent.OnRemoveHistory(it)) },
+                                onClear = { onIntent(SearchIntent.OnClearHistory) },
+                                modifier = Modifier.padding(top = BeeDimens.gapSmall),
+                            )
+
+                            else -> BeeCenteredNotice(
+                                fillHeight = true,
+                                text = stringResource(R.string.search_hint),
                             )
                         }
                     }
@@ -199,27 +208,35 @@ private fun SearchResults(
         // 是完全不同的两个结论。
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             /*
-             * "一个源都没有" 与 "搜了但没找到" 是**两回事**，文案不能共用。
+             * 三种"没有结果"必须分得开，文案不能共用：
              *
-             * 数据层在 `searchable` 为空时返回的是 `SearchOutcome.EMPTY`
-             * （两个计数都是 0），而不是抛异常 —— 因为"这个配置里没有可搜索的站点"
-             * 不是错误，是配置事实。但如果这里照旧说「没有找到「XX」」，
-             * 用户会去改关键词，而改多少次都不会有结果。
+             * 1. 配置里本来就没有可搜索的站点 —— 改关键词多少次都不会有结果，
+             *    得让他去配置里找。
+             * 2. 有可搜索的站点，但**全被用户自己设成了「不参与搜索」** ——
+             *    这时候说"没有可搜索的站点"是撒谎，他会去翻配置却找不到问题。
+             * 3. 真的搜了、但没搜到 —— 这才是可以换关键词的那种。
              */
-            if (outcome.searchableSources == 0) {
-                BeeCenteredNotice(
+            when {
+                outcome.searchableSources == 0 && outcome.disabledSources > 0 ->
+                    BeeCenteredNotice(
+                        fillHeight = true,
+                        text = stringResource(
+                            R.string.search_all_excluded,
+                            outcome.disabledSources,
+                        ),
+                    )
+
+                outcome.searchableSources == 0 -> BeeCenteredNotice(
                     fillHeight = true,
                     text = stringResource(R.string.search_no_searchable),
                 )
-            } else {
-                BeeCenteredNotice(
+
+                else -> BeeCenteredNotice(
                     fillHeight = true,
                     text = stringResource(R.string.search_no_result, keyword),
                 )
             }
-            if (outcome.truncated) {
-                CoverageLine(outcome)
-            }
+            CoverageLine(outcome)
         }
         return
     }
@@ -242,7 +259,7 @@ private fun SearchResults(
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (outcome.truncated) CoverageLine(outcome)
+                CoverageLine(outcome)
             }
         }
         items(outcome.vods, key = { it.id }, contentType = { "poster" }) { vod ->
@@ -252,24 +269,40 @@ private fun SearchResults(
 }
 
 /**
- * 「已搜索 N / M 个源」。
+ * 覆盖情况："只搜了一部分"与"有一部分被自己排除了"。
  *
- * 只在**真的被截断**时出现。跨源搜索有站点上限（一个上百站点的合集全量并行
- * 会瞬间打出上百个请求），但截断不能是静默的：搜不到时用户无法区分
- * "所有源都没有"和"只搜了一部分"。详见 [SearchOutcome]。
+ * 两者都只在**真的发生**时才出现（内部各自判断）。跨源搜索有站点上限（一个上百站点的
+ * 合集全量并行会瞬间打出上百个请求），而排除是用户自己设的 —— 但两件事都不能静默：
+ * 搜不到时用户无法区分"所有源都没有"和"只搜了一部分"。详见 [SearchOutcome]。
  */
 @Composable
 private fun CoverageLine(outcome: SearchOutcome) {
-    Text(
-        text = stringResource(
-            R.string.search_coverage,
-            outcome.searchedSources,
-            outcome.searchableSources,
-        ),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = BeeDimens.gapTight),
-    )
+    val lines = buildList {
+        if (outcome.truncated) {
+            add(
+                stringResource(
+                    R.string.search_coverage,
+                    outcome.searchedSources,
+                    outcome.searchableSources,
+                )
+            )
+        }
+        if (outcome.disabledSources > 0) {
+            add(stringResource(R.string.search_excluded_sources, outcome.disabledSources))
+        }
+    }
+    if (lines.isEmpty()) return
+
+    Column {
+        lines.forEach { line ->
+            Text(
+                text = line,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = BeeDimens.gapTight),
+            )
+        }
+    }
 }
 
 // ------------------------------------------------------------------ 预览
@@ -308,6 +341,27 @@ private fun SearchScreenPreview() {
 private fun SearchScreenLightPreview() {
     BeeVideoTheme(darkTheme = false) {
         SearchScreen(uiState = SearchUiState(), onIntent = {})
+    }
+}
+
+/** 有历史时的空态：看的是换行、长按提示与「清空」那行的关系。 */
+@Preview(
+    name = "搜索 · 有历史",
+    group = "页面",
+    showBackground = true,
+    backgroundColor = 0xFF0B0A08,
+    widthDp = 411,
+    heightDp = 891,
+)
+@Composable
+private fun SearchScreenHistoryPreview() {
+    BeeVideoTheme(darkTheme = true) {
+        SearchScreen(
+            uiState = SearchUiState(
+                history = listOf("庆余年", "繁花", "三体 第一季", "流浪地球", "漫长的季节"),
+            ),
+            onIntent = {},
+        )
     }
 }
 

@@ -72,6 +72,9 @@ class VodContentRepository(
         SourceStatus.Initial.copy(
             configUrl = store.configUrl,
             activeSourceId = store.activeSourceId,
+            // 偏好先读出来备着：装载完成后要按它排 sources / 标排除
+            excludedSourceIds = store.excludedSourceIds,
+            pinnedSourceIds = store.sourceOrder,
         )
     )
     override val status: StateFlow<SourceStatus> = _status.asStateFlow()
@@ -135,6 +138,41 @@ class VodContentRepository(
         _status.value = current.copy(activeSourceId = sourceId)
     }
 
+    /**
+     * 排除只改"搜不搜它"。
+     *
+     * ⚠️ 有意**不动** [activeSourceId]：用户把当前来源设成不参与搜索之后，他还在看
+     * 那个站的分类页。悄悄把他弹到别的站上，比"一个前后不一致的状态"更糟
+     * （他正在翻的列表会整个换掉，而没人告诉他为什么）。
+     */
+    override fun setSourceExcluded(sourceId: String, excluded: Boolean) {
+        val current = _status.value
+        if (current.sources.none { it.id == sourceId }) return
+        val next = if (excluded) {
+            current.excludedSourceIds + sourceId
+        } else {
+            current.excludedSourceIds - sourceId
+        }
+        if (next == current.excludedSourceIds) return
+        store.excludedSourceIds = next
+        _status.value = current.copy(excludedSourceIds = next)
+    }
+
+    override fun togglePinSource(sourceId: String) {
+        val current = _status.value
+        if (current.sources.none { it.id == sourceId }) return
+        val next = if (sourceId in current.pinnedSourceIds) {
+            current.pinnedSourceIds - sourceId
+        } else {
+            listOf(sourceId) + current.pinnedSourceIds
+        }
+        store.sourceOrder = next
+        _status.value = current.copy(
+            pinnedSourceIds = next,
+            sources = orderByPinned(current.sources, next),
+        )
+    }
+
     override suspend fun clear() {
         command<Unit> {
             store.clear()
@@ -172,7 +210,19 @@ class VodContentRepository(
             invalidateWindows()
             config = parsed
 
-            val sources = parsed.sites.map { ContentSource(id = it.key, name = it.name) }
+            /*
+             * ⚠️ 换了一份配置，站点级的偏好就必须作废：站点 key 会变，而且不同配置里
+             * 的 key 会撞名 —— 留着会让"我刚在 A 配置里排除的站"在 B 配置里也消失。
+             * 判据是**已落盘的地址**：`restore()` 传进来的就是它，所以恢复不会误清。
+             */
+            if (store.configUrl != url) clearSourcePrefs()
+
+            val pinned = store.sourceOrder
+            val excluded = store.excludedSourceIds
+            val sources = orderByPinned(
+                parsed.sites.map { ContentSource(id = it.key, name = it.name) },
+                pinned,
+            )
             val remembered = store.activeSourceId
             val active = remembered.takeIf { id -> sources.any { it.id == id } }
                 ?: sources.first().id
@@ -190,6 +240,8 @@ class VodContentRepository(
                 } else {
                     "共 ${sources.size} 个来源"
                 },
+                excludedSourceIds = excluded,
+                pinnedSourceIds = pinned,
             )
             null
         } catch (e: CancellationException) {
@@ -249,17 +301,27 @@ class VodContentRepository(
         if (q.isEmpty()) return@query SearchOutcome.EMPTY
 
         val cfg = requireConfig()
-        val searchable = cfg.sites.filter { it.searchable }
-        if (searchable.isEmpty()) return@query SearchOutcome.EMPTY
+        val plan = planSearch(
+            searchableKeys = cfg.sites.filter { it.searchable }.map { it.key },
+            excluded = _status.value.excludedSourceIds,
+            max = MAX_SEARCH_SITES,
+        )
 
-        // 上限必须对外可见：截断不能静默，否则 100 个源只搜 10 个，用户看到的和"全搜了"一样
-        val sites = searchable.take(MAX_SEARCH_SITES)
+        // 全被用户自己排除了。这不是"配置里没有可搜索的站点"，两种情况界面必须分得开
+        if (plan.keys.isEmpty()) {
+            return@query SearchOutcome(
+                vods = emptyList(),
+                searchedSources = 0,
+                searchableSources = 0,
+                disabledSources = plan.disabled,
+            )
+        }
 
         // supervisorScope：单个站点失败不影响整体。awaitAll 按传入顺序，排序稳定
         val batches = supervisorScope {
-            sites.map { site ->
+            plan.keys.map { key ->
                 async {
-                    runCatching { clientFor(site.key, cfg).searchContent(q) }
+                    runCatching { clientFor(key, cfg).searchContent(q) }
                         .getOrDefault(emptyList())
                 }
             }.awaitAll()
@@ -267,8 +329,9 @@ class VodContentRepository(
 
         SearchOutcome(
             vods = batches.flatten().distinctBy { it.name },
-            searchedSources = sites.size,
-            searchableSources = searchable.size,
+            searchedSources = plan.keys.size,
+            searchableSources = plan.searchable,
+            disabledSources = plan.disabled,
         )
     }
 
@@ -302,6 +365,12 @@ class VodContentRepository(
         homeWindow.invalidate()
         detailWindow.invalidate()
         playTargetWindow.invalidate()
+    }
+
+    /** 站点级的偏好与配置同生共死，换配置时一起清。 */
+    private fun clearSourcePrefs() {
+        store.excludedSourceIds = emptySet()
+        store.sourceOrder = emptyList()
     }
 
     private fun requireConfig(): CatVodConfig =
@@ -348,4 +417,55 @@ class VodContentRepository(
          */
         const val MERGE_WINDOW_MS = 3_000L
     }
+}
+
+// -------------------------------------------------------------------- 纯逻辑
+// 这两个函数放在类外是因为**它们要能被直接测**：`SiteClient` 有六个方法要假实现，
+// 而"筛谁、数几、谁排前"一点网络都不需要。留在类里就得多造一整套假站点客户端。
+
+/**
+ * 置顶的排前面，其余保持配置里的原序。
+ *
+ * ⚠️ 用 `mapNotNull`：置顶列表里可能有这份配置里已不存在的 id（换配置时清了，
+ * 但恢复一份旧记录时未必同步），不能直接拿来当结果。
+ */
+internal fun orderByPinned(
+    sources: List<ContentSource>,
+    pinned: List<String>,
+): List<ContentSource> {
+    if (pinned.isEmpty()) return sources
+    val byId = sources.associateBy { it.id }
+    val head = pinned.mapNotNull { byId[it] }
+    val headIds = head.mapTo(mutableSetOf()) { it.id }
+    return head + sources.filterNot { it.id in headIds }
+}
+
+/** 一次搜索的站点计划。三个数都要如实：静默少搜比搜不到更糟。 */
+internal data class SearchPlan(
+    /** 真正要发请求的站点（已排除、已按上限截断）。 */
+    val keys: List<String>,
+    /** 可搜索且未被排除的站点总数。[keys] 比它短即为截断。 */
+    val searchable: Int,
+    /** 被用户设成「不参与搜索」的站点数。 */
+    val disabled: Int,
+) {
+    val truncated: Boolean get() = keys.size < searchable
+}
+
+/**
+ * 挑出这次要请求的站点。
+ *
+ * [excluded] 只在这里生效 —— 被排除的站点仍可作为当前来源浏览（见 [setSourceExcluded]）。
+ */
+internal fun planSearch(
+    searchableKeys: List<String>,
+    excluded: Set<String>,
+    max: Int,
+): SearchPlan {
+    val enabled = searchableKeys.filterNot { it in excluded }
+    return SearchPlan(
+        keys = enabled.take(max),
+        searchable = enabled.size,
+        disabled = searchableKeys.size - enabled.size,
+    )
 }

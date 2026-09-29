@@ -39,6 +39,17 @@ interface ContentSourceRepository {
     /** 切换当前使用的来源；[sourceId] 不在列表里时忽略。 */
     fun selectSource(sourceId: String)
 
+    /**
+     * 设某个来源是否参与聚合搜索。不在列表里时忽略。
+     *
+     * 与 [selectSource] 是两件事：**排除只影响搜索**，用户仍可以把它切成当前来源
+     * 单独浏览 —— "不进搜索"不等于"不能用"。
+     */
+    fun setSourceExcluded(sourceId: String, excluded: Boolean)
+
+    /** 置顶 / 取消置顶。置顶的排在选择器最前，其余保持配置里的原序。 */
+    fun togglePinSource(sourceId: String)
+
     /** 清空配置与本地记录。 */
     suspend fun clear()
 }

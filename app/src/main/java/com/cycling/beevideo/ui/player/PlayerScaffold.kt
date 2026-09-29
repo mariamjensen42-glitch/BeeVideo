@@ -20,13 +20,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
@@ -61,9 +57,6 @@ internal data class PlayerUiState(
     val episodeName: String,
     val episodes: List<Episode>,
     val currentIndex: Int,
-    val statusText: String,
-    val urlText: String,
-    val isBuffering: Boolean,
     // 放末尾：上面那行解构是位置式的，插在中间就得跟着改
     val lines: List<PlayLine> = emptyList(),
     val currentLineIndex: Int = 0,
@@ -82,12 +75,10 @@ internal fun PlayerScaffold(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onBack: () -> Unit,
-    onInfoClick: () -> Unit,
     isFullscreen: Boolean,
     player: @Composable (Modifier) -> Unit,
 ) {
-    val (title, lineName, episodeName, episodes, currentIndex, statusText, urlText, isBuffering) =
-        state
+    val (title, lineName, episodeName, episodes, currentIndex) = state
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // ⚠️ 全屏与竖屏共用同一棵树：两棵子树会让 AndroidView 重建、SurfaceView 重挂 = 黑闪一帧
@@ -117,14 +108,6 @@ internal fun PlayerScaffold(
                         }
                     },
                     navigationIcon = { BeeBackButton(onBack) },
-                    actions = {
-                        IconButton(onClick = onInfoClick) {
-                            Icon(
-                                imageVector = Icons.Outlined.Info,
-                                contentDescription = stringResource(R.string.player_action_info),
-                            )
-                        }
-                    },
                     colors = beeTopAppBarColors(),
                     scrollBehavior = scrollBehavior,
                 )
@@ -172,20 +155,6 @@ internal fun PlayerScaffold(
                         text = stringResource(R.string.player_line, lineName),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
-                    )
-                    Spacer(Modifier.height(BeeDimens.gapTight))
-                    Text(
-                        text = statusText,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                    )
-                    Spacer(Modifier.height(BeeDimens.gapTight))
-                    Text(
-                        text = urlText,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(BeeDimens.gapSmall))
 

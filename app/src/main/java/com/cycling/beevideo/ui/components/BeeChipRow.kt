@@ -1,6 +1,8 @@
 package com.cycling.beevideo.ui.components
 
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,12 +20,17 @@ import androidx.compose.material3.ToggleButtonShapes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.cycling.beevideo.ui.preview.PreviewSites
 import com.cycling.beevideo.ui.preview.PreviewVods
 import com.cycling.beevideo.ui.theme.BeeDimens
 import com.cycling.beevideo.ui.theme.BeeVideoTheme
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 横向单选行 —— M3 Expressive 的「连接式按钮组」。
@@ -99,6 +106,23 @@ fun <T> BeeChipGrid(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 长按某一项（传下标）。
+     *
+     * 实现见 [observeLongPress]：只在 Initial pass 上观察、**不消费任何事件**，
+     * 所以 chip 的点击、水波纹与选中态完全不受影响。不传时连手势节点都不挂。
+     */
+    onLongPress: ((Int) -> Unit)? = null,
+    /** 读屏用的长按说明。只有传了 [onLongPress] 才有意义。 */
+    longPressLabel: String? = null,
+    /**
+     * 每项自带的弹层槽位（传下标）。
+     *
+     * ⚠️ 必须**逐项**锚定，不能把菜单放在整块网格外面：实测一份配置 86 个站点、
+     * 每行只排得下 2 个，网格有四十多行 —— 菜单锚在整块上时，长按底部的 chip
+     * 会让菜单出现在网格顶部、甚至屏幕外。
+     */
+    menu: (@Composable (Int) -> Unit)? = null,
     label: @Composable (T) -> Unit = {
         Text(text = it.toString(), style = MaterialTheme.typography.labelLarge)
     },
@@ -118,12 +142,32 @@ fun <T> BeeChipGrid(
             verticalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
         ) {
             items.forEachIndexed { index, item ->
-                ToggleButton(
-                    checked = index == selectedIndex,
-                    onCheckedChange = { onSelect(index) },
-                    shapes = connectedButtonShapes(index, items.size),
-                    content = { label(item) },
-                )
+                // Box 既是菜单的锚点，也承载长按观察。不传这两个参数时它不改变任何行为
+                Box(
+                    modifier = Modifier
+                        .observeLongPress(
+                            key = index,
+                            onLongPress = onLongPress?.let { press -> { press(index) } },
+                        )
+                        // 长按是隐藏操作，读屏得能念出来（`observeLongPress` 是纯观察，
+                        // 不产生任何语义）
+                        .semantics {
+                            if (longPressLabel != null && onLongPress != null) {
+                                onLongClick(label = longPressLabel) {
+                                    onLongPress.invoke(index)
+                                    true
+                                }
+                            }
+                        },
+                ) {
+                    ToggleButton(
+                        checked = index == selectedIndex,
+                        onCheckedChange = { onSelect(index) },
+                        shapes = connectedButtonShapes(index, items.size),
+                        content = { label(item) },
+                    )
+                    menu?.invoke(index)
+                }
             }
         }
     }
@@ -137,6 +181,45 @@ private fun connectedButtonShapes(index: Int, count: Int): ToggleButtonShapes = 
     count <= 1 || index == 0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
     index == count - 1 -> ButtonGroupDefaults.connectedTrailingButtonShapes()
     else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+}
+
+/**
+ * 在 **Initial pass** 上观察长按。
+ *
+ * ⚠️ 为什么不是 `Modifier.combinedClickable`：`ToggleButton` 内部的 `selectable` 在
+ * Main pass 消费事件，而 Main pass 是**子节点优先** —— 挂在 chip 外层的手势永远
+ * 收不到 up，长按也就永远不触发。`onCheckedChange = null` 那条路也走不通：
+ * material3 1.5.0-alpha28 里这个参数**不可空**。
+ *
+ * Initial pass 是**父到子**分发、且此时事件还没被消费，所以这里能看见长按，
+ * 而**一个事件都不消费** —— chip 自己的点击、水波纹、选中态全都照旧。
+ * 长按超时后再抬手，`ToggleButton` 内部也不会触发点击（它自己就带这个判据）。
+ */
+private fun Modifier.observeLongPress(
+    key: Any?,
+    onLongPress: (() -> Unit)?,
+): Modifier = if (onLongPress == null) {
+    this
+} else {
+    pointerInput(key) {
+        awaitEachGesture {
+            val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull()
+            if (down?.pressed != true) return@awaitEachGesture
+
+            // 超时即长按；中途抬手说明是点击，交给 chip 自己处理
+            val timedOut = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                var pressed = true
+                while (pressed) {
+                    pressed = awaitPointerEvent(PointerEventPass.Initial)
+                        .changes
+                        .firstOrNull()
+                        ?.pressed == true
+                }
+            } == null
+
+            if (timedOut) onLongPress.invoke()
+        }
+    }
 }
 
 // ------------------------------------------------------------------ 预览

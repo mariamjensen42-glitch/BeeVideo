@@ -170,10 +170,18 @@ fun HomeScreen(
         SourcePickerSheet(
             sources = status.sources,
             activeId = status.activeSourceId,
+            excludedIds = status.excludedSourceIds,
+            pinnedIds = status.pinnedSourceIds,
             onSelect = { id ->
                 sources.selectSource(id)
+                // 选完即走：切站是"选一个就完了"的动作
                 pickerOpen = false
             },
+            // 改开关**不关弹层**：连着设好几个站点是常态
+            onToggleExcluded = { id ->
+                sources.setSourceExcluded(id, id !in status.excludedSourceIds)
+            },
+            onTogglePin = { id -> sources.togglePinSource(id) },
             onDismiss = { pickerOpen = false },
         )
     }

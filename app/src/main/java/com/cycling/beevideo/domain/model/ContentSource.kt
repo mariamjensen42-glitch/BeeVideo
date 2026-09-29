@@ -36,6 +36,19 @@ data class SourceStatus(
     /** 当前选中的来源；为空表示还没选（界面取第一个） */
     val activeSourceId: String,
     val message: String,
+    /**
+     * 设成「不参与搜索」的来源 id。
+     *
+     * 为什么放这里而不是给 [ContentSource] 加字段：排除是**列表级的偏好**，
+     * 不是来源本身的属性 —— 换一份配置这些 id 就全不作数了（见 `VodContentRepository`）。
+     * 界面本来就拿着 status，不必让模型多一个字段。
+     */
+    val excludedSourceIds: Set<String> = emptySet(),
+    /**
+     * 置顶的来源 id。界面靠它决定菜单里显示「置顶」还是「取消置顶」；
+     * 而 [sources] 的顺序已经按它排好了，界面不需要自己再排一遍。
+     */
+    val pinnedSourceIds: List<String> = emptyList(),
 ) {
     companion object {
         val Initial = SourceStatus(

@@ -30,6 +30,14 @@ data class SearchUiState(
      * 而那是**两句不同的话** —— 前者要告诉用户怎么开始，后者要说清搜的是哪个词。
      */
     val result: LoadState<SearchOutcome?> = LoadState.Ready(null),
+    /**
+     * 最近搜过的词，新的在前。
+     *
+     * 它不进除空态之外的任何判断 —— 界面只在"还没搜过"那一支用它。
+     * 无痕模式下它恒为空（拦截在仓储，见 `PrefsSearchHistoryRepository`），
+     * 所以界面不需要知道无痕这回事。
+     */
+    val history: List<String> = emptyList(),
 )
 
 sealed interface SearchIntent {
@@ -40,6 +48,15 @@ sealed interface SearchIntent {
 
     /** 提交（点键盘的搜索键）。空白词直接忽略。 */
     data object OnSubmit : SearchIntent
+
+    /** 点一条历史。**等同于把那个词填进输入框再提交**，否则结果有了而输入框空着。 */
+    data class OnUseHistory(val keyword: String) : SearchIntent
+
+    /** 删一条历史。 */
+    data class OnRemoveHistory(val keyword: String) : SearchIntent
+
+    /** 清空历史。界面负责先二次确认。 */
+    data object OnClearHistory : SearchIntent
 
     data class OnOpenVod(val vod: Vod) : SearchIntent
 

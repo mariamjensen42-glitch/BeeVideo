@@ -167,15 +167,50 @@ internal fun CacheSection(
     }
 }
 
-/** 【关于】。 */
+/**
+ * 【无痕模式】。开关一拨就落盘 —— 它改的是**后续所有写入**，攒着不写等于没改。
+ *
+ * 说明文字不省略：这个模式是"关掉的时候"才清数据，用户必须在打开前就知道它管什么、
+ * 不管什么（站点配置与已下载的播放缓存都不受影响），否则关掉时看到占用变了会归咎于此。
+ */
 @Composable
-internal fun AboutSection() {
-    SettingsSection(title = stringResource(R.string.settings_section_about)) {
+internal fun IncognitoSection(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    SettingsSection(title = stringResource(R.string.settings_section_incognito)) {
         Text(
-            text = stringResource(R.string.settings_about_body),
+            text = stringResource(R.string.settings_incognito_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(BeeDimens.gapMedium))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.settings_incognito_switch),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+            )
+        }
+
+        // 只在开着时摆这一句：关着的时候它是纯噪音
+        if (enabled) {
+            Spacer(Modifier.height(BeeDimens.gapSmall))
+            Text(
+                text = stringResource(R.string.settings_incognito_on),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

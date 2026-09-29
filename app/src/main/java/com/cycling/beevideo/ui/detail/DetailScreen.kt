@@ -47,6 +47,13 @@ fun DetailScreen(
     content: ContentRepository,
     library: LibraryRepository,
     vodId: String,
+    /**
+     * 无痕会话里收藏按钮停用。
+     *
+     * 写入那一步在仓储里**已经**被拦掉了，这个标志只管"让用户看得出按不动"：
+     * 一个点了没反应的按钮比一个灰掉的按钮更让人困惑。
+     */
+    keepEnabled: Boolean,
     onBack: () -> Unit,
     onPlay: (lineIndex: Int, episodeIndex: Int) -> Unit,
 ) {
@@ -108,7 +115,9 @@ fun DetailScreen(
                     // 详情到手后才出现：收藏要存片名、封面这些快照字段
                     if (vod != null) {
                         KeepAction(
+                            // 无痕时 isKept 恒为 false（仓储那条流），图标自然回到描边态
                             kept = isKept,
+                            enabled = keepEnabled,
                             onClick = { state.toggleKeep(vod) },
                         )
                     }
@@ -161,12 +170,16 @@ fun DetailScreen(
 
 /** 收藏开关：实心 = 已收藏、描边 = 未收藏。状态变化不能只靠颜色（色觉障碍看不到颜色差）。 */
 @Composable
-private fun KeepAction(kept: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
+private fun KeepAction(kept: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled) {
         Icon(
             imageVector = if (kept) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
             contentDescription = stringResource(
-                if (kept) R.string.cd_keep_remove else R.string.cd_keep_add
+                when {
+                    !enabled -> R.string.cd_keep_disabled
+                    kept -> R.string.cd_keep_remove
+                    else -> R.string.cd_keep_add
+                }
             ),
         )
     }

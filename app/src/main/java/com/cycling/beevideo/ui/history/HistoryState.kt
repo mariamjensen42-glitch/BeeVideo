@@ -3,6 +3,7 @@ package com.cycling.beevideo.ui.history
 import com.cycling.beevideo.domain.model.KeepItem
 import com.cycling.beevideo.domain.model.PlayProgress
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 import com.cycling.beevideo.ui.mvi.MviState
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,7 @@ import kotlinx.coroutines.launch
 class HistoryState(
     private val library: LibraryRepository,
     sources: ContentSourceRepository,
+    incognito: IncognitoMode,
     /** 取当前时间。注入是为了让收藏记录的 `createdAt` 在测试里确定。 */
     private val now: () -> Long = System::currentTimeMillis,
     scope: CoroutineScope,
@@ -33,6 +35,11 @@ class HistoryState(
             library.keeps.collect { keeps ->
                 setState { it.copy(keptIds = keeps.mapTo(mutableSetOf()) { it.vodId }) }
             }
+        }
+
+        // 无痕状态只影响这一页的空态文案（记录本身在仓储那层已经变成空的）
+        scope.launch {
+            incognito.enabled.collect { on -> setState { it.copy(incognito = on) } }
         }
 
         scope.launch {

@@ -2,11 +2,13 @@ package com.cycling.beevideo.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,11 +19,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -134,6 +138,8 @@ fun PosterCard(
     vod: Vod,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    menu: (@Composable () -> Unit)? = null,
 ) {
     PosterCard(
         id = vod.id,
@@ -143,6 +149,8 @@ fun PosterCard(
         remarks = vod.remarks,
         onClick = onClick,
         modifier = modifier,
+        onLongClick = onLongClick,
+        menu = menu,
     )
 }
 
@@ -151,6 +159,10 @@ fun PosterCard(
  *
  * 有第二个重载是因为收藏页手里没有 `Vod`（存的是快照），硬造一个就得给
  * `categoryId` / `intro` / `lines` 编假值；让收藏页自己抄一份布局则会有两个实现。
+ *
+ * ─── [onLongClick] / [menu] 为什么是可空的槽位（照 `HistoryRow` 的形状） ────
+ * 首页与搜索结果**不传**，它们只负责"点进去"。收藏页传 —— 管理动作在那一页。
+ * 不传时走的是与以前一模一样的 `Card(onClick = …)`，行为逐帧不变。
  */
 @Composable
 fun PosterCard(
@@ -161,6 +173,8 @@ fun PosterCard(
     remarks: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    menu: (@Composable () -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
@@ -170,68 +184,111 @@ fun PosterCard(
         label = "posterScale",
     )
 
-    Card(
-        onClick = onClick,
-        modifier = modifier.graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-        },
-        interactionSource = interactionSource,
-        shape = MaterialTheme.shapes.medium,
-        // 容器色只是图的兜底，取跟页面同族的一档，免得某张图没铺满时露方块
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
+    val shape = MaterialTheme.shapes.medium
+    // 容器色只是图的兜底，取跟页面同族的一档，免得某张图没铺满时露方块
+    val colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    )
+    val scaled = Modifier.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+
+    // 菜单（如果有）锚在这张卡上，所以要有个共同的父节点
+    Box(modifier = modifier) {
+        // Card 的 content 是 ColumnScope 扩展，类型必须写全，否则传不进去
+        val content: @Composable ColumnScope.() -> Unit = {
+            PosterCardContent(id = id, name = name, pic = pic, score = score, remarks = remarks)
+        }
+
+        if (onLongClick == null) {
+            Card(
+                onClick = onClick,
+                modifier = scaled,
+                interactionSource = interactionSource,
+                shape = shape,
+                colors = colors,
+                content = content,
+            )
+        } else {
+            Card(
+                // clip 打在点击层外面：combinedClickable 的水波纹按节点边界裁，
+                // 不裁的话圆角上会露出直角涟漪（同 HistoryRow）
+                modifier = scaled
+                    .clip(shape)
+                    .combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                        interactionSource = interactionSource,
+                        indication = ripple(),
+                    ),
+                shape = shape,
+                colors = colors,
+                content = content,
+            )
+        }
+
+        menu?.invoke()
+    }
+}
+
+/** 卡片里的内容。抽出来是为了让上面那两条点击分支只有一行之差，不复制一整块版式。 */
+@Composable
+private fun PosterCardContent(
+    id: String,
+    name: String,
+    pic: String,
+    score: String,
+    remarks: String,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(BeeDimens.posterAspect)
+            // remember：要算两个 hsl 颜色，滚动时没必要每次重组都重算
+            .background(remember(id) { posterBrush(id) }),
     ) {
+        // ⚠️ 渐变不撤：相当一部分来源不给封面（聚合类尤其），"没有图"是被设计过的
+        // 一条路径，留着它当底比再维护一套 Coil placeholder 状态少一层
+        BeePosterImage(pic)
+
+        // 图上文字必须压一层 scrim，否则遇到浅色封面就读不出来
         Box(
             modifier = Modifier
+                .fillMaxSize()
+                .background(CardScrim),
+        )
+
+        ScoreBadge(
+            score = score,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(BeeDimens.posterInset),
+        )
+
+        // 片名与状态左对齐堆叠：给这一块一条明确的版轴
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .aspectRatio(BeeDimens.posterAspect)
-                // remember：要算两个 hsl 颜色，滚动时没必要每次重组都重算
-                .background(remember(id) { posterBrush(id) }),
+                .padding(BeeDimens.posterInset),
         ) {
-            // ⚠️ 渐变不撤：相当一部分来源不给封面（聚合类尤其），"没有图"是被设计过的
-            // 一条路径，留着它当底比再维护一套 Coil placeholder 状态少一层
-            BeePosterImage(pic)
-
-            // 图上文字必须压一层 scrim，否则遇到浅色封面就读不出来
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(CardScrim),
+            Text(
+                text = name,
+                color = PosterTextPrimary,
+                style = MaterialTheme.typography.titleMediumEmphasized.copy(
+                    fontFamily = BeeBrandFont,
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-
-            ScoreBadge(
-                score = score,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(BeeDimens.posterInset),
+            Text(
+                text = remarks,
+                color = PosterTextSecondary,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-
-            // 片名与状态左对齐堆叠：给这一块一条明确的版轴
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(BeeDimens.posterInset),
-            ) {
-                Text(
-                    text = name,
-                    color = PosterTextPrimary,
-                    style = MaterialTheme.typography.titleMediumEmphasized.copy(
-                        fontFamily = BeeBrandFont,
-                    ),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = remarks,
-                    color = PosterTextSecondary,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
     }
 }

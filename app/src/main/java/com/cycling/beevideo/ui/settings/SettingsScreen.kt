@@ -54,6 +54,9 @@ fun SettingsScreen(
     cache: MediaCache,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
+    /** 无痕开关的当前值。它进的是参数不是本页的 `remember`：真相在 App 级那条流上。 */
+    incognito: Boolean,
+    onIncognitoChange: (Boolean) -> Unit,
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
         state = rememberTopAppBarState(),
@@ -167,6 +170,15 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(BeeDimens.gapSmall))
 
+            // 摆在缓存之后：它俩最容易混（都跟"本机留下什么"有关），紧挨着才好对照
+            // 上面那句"站点配置与已下载的播放缓存不受影响"
+            IncognitoSection(
+                enabled = incognito,
+                onEnabledChange = onIncognitoChange,
+            )
+
+            Spacer(Modifier.height(BeeDimens.gapSmall))
+
             AboutSection()
 
             Spacer(Modifier.height(BeeDimens.gapHuge))
@@ -177,10 +189,18 @@ fun SettingsScreen(
         SourcePickerSheet(
             sources = status.sources,
             activeId = status.activeSourceId,
+            excludedIds = status.excludedSourceIds,
+            pinnedIds = status.pinnedSourceIds,
             onSelect = { id ->
                 sources.selectSource(id)
+                // 选完即走：切站是"选一个就完了"的动作
                 pickerOpen = false
             },
+            // 改开关**不关弹层**：连着设好几个站点是常态
+            onToggleExcluded = { id ->
+                sources.setSourceExcluded(id, id !in status.excludedSourceIds)
+            },
+            onTogglePin = { id -> sources.togglePinSource(id) },
             onDismiss = { pickerOpen = false },
         )
     }

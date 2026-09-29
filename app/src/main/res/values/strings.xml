@@ -43,6 +43,13 @@
     <string name="search_placeholder">输入片名</string>
     <string name="search_clear">清空</string>
     <string name="search_hint">输入片名，在所有可搜索的来源里找</string>
+    <string name="search_history_title">最近搜索</string>
+    <string name="search_history_clear">清空</string>
+    <string name="search_history_remove">删除这条</string>
+    <string name="search_history_long_press">长按可删除</string>
+    <string name="search_history_clear_title">清空搜索历史？</string>
+    <string name="search_history_clear_body">已保存的关键词会全部移除，此操作不可撤销。</string>
+    <string name="search_history_clear_confirm">清空</string>
     <string name="search_loading">正在搜索…</string>
     <string name="search_result_count">找到 %1$d 部</string>
     <string name="search_no_result">没有找到「%1$s」</string>
@@ -50,6 +57,7 @@
     <!-- 跨源搜索有站点上限，必须让"少搜了一部分"可见（见 SearchOutcome） -->
     <string name="search_coverage">已搜索 %1$d / %2$d 个源</string>
     <string name="search_no_searchable">当前来源里没有可搜索的站点</string>
+    <string name="search_all_excluded">%1$d 个可搜索的站点都被设成了「不参与搜索」，去设置里放开一个再搜</string>
 
     <!-- 收藏 -->
     <string name="keep_title">收藏</string>
@@ -57,14 +65,20 @@
     <string name="keep_empty_title">还没有收藏</string>
     <string name="keep_empty_body">在详情页点右上角的书签图标即可收藏。收藏只存在本机，不会上传。</string>
     <string name="keep_load_failed">读取收藏失败：%1$s</string>
+    <string name="keep_menu_detail">详情</string>
+    <string name="keep_menu_remove">取消收藏</string>
     <string name="cd_keep_add">收藏</string>
     <string name="cd_keep_remove">取消收藏</string>
+    <string name="cd_keep_disabled">无痕模式下不能收藏</string>
 
     <!-- 观看历史。顺序与文案的分工见 HistoryText.kt：判据在代码里，词在这里 -->
     <string name="history_title">观看历史</string>
     <string name="history_loading">正在读取观看记录…</string>
     <string name="history_empty_title">还没有观看记录</string>
     <string name="history_empty_body">播放过的内容会在这里留下进度，点一下就能从上次的位置接着看。记录只存在本机，不会上传。</string>
+    <!-- 无痕会话下这一页必然是空的，但不能说"还没有观看记录" —— 那是在说用户没看过 -->
+    <string name="history_incognito_title">无痕模式已开启</string>
+    <string name="history_incognito_body">本次不会记录观看进度，已有的记录也暂时不显示。关掉无痕模式就都回来了。</string>
     <string name="history_clear">清空历史</string>
     <string name="history_clear_title">清空全部观看记录？</string>
     <string name="history_clear_body">所有影片的续播位置会被删除，此操作不可撤销。收藏不受影响。</string>
@@ -110,6 +124,13 @@
     <string name="settings_source_search">搜索站点名</string>
     <string name="settings_source_count">共 %1$d 个</string>
     <string name="settings_source_no_match">没有匹配的来源</string>
+    <string name="settings_source_long_press_hint">长按站点可设置是否参与搜索，或置顶</string>
+    <string name="settings_source_long_press">长按可设置</string>
+    <string name="settings_source_exclude">不参与搜索</string>
+    <string name="settings_source_include">参与搜索</string>
+    <string name="settings_source_pin">置顶</string>
+    <string name="settings_source_unpin">取消置顶</string>
+    <string name="search_excluded_sources">已排除 %1$d 个</string>
     <string name="settings_section_playback">播放</string>
     <string name="settings_auto_next">自动播放下一集</string>
     <string name="settings_section_cache">播放缓存</string>
@@ -123,8 +144,31 @@
     <string name="settings_cache_clear_title">清空播放缓存？</string>
     <string name="settings_cache_clear_body">已下载的内容会被删除，下次播放重新下载。</string>
     <string name="settings_cache_clear_confirm">清空</string>
+    <!-- 无痕模式。它改变的是「后续所有写入」，不是某份数据，取舍见 ADR-0010 -->
+    <string name="settings_section_incognito">无痕模式</string>
+    <string name="settings_incognito_body">开启后不记录观看历史：播放进度不再写入本机，收藏按钮停用，已有的记录暂时隐藏。站点配置与已下载的播放缓存不受影响。它只管本机留下什么，不改变对内容源的访问，也不隐藏你的地址。</string>
+    <string name="settings_incognito_switch">启用无痕模式</string>
+    <string name="settings_incognito_on">本次播放产生的临时文件只留在无痕区，关掉这个开关时会被删除。开关本身会被记住，重开 App 仍然有效。</string>
+    <!-- 关于：四个入口。「更新日志」是静态文案，随发版手工追加（最新一版也要同步改
+         AboutSection.kt 里的 LATEST_RELEASE） -->
     <string name="settings_section_about">关于</string>
     <string name="settings_about_body">BeeVideo 是一个播放器外壳，只负责播放与本地媒体管理，覆盖范围是视频点播与本地播放。</string>
+    <string name="settings_about_row_app">关于</string>
+    <string name="settings_about_row_changelog">更新日志</string>
+    <string name="settings_about_row_license">开源许可</string>
+    <string name="settings_about_row_disclaimer">免责声明</string>
+    <string name="settings_about_summary_app">版本 %1$s</string>
+    <string name="settings_about_summary_changelog">最新 %1$s</string>
+    <string name="settings_about_summary_license">GPL-3.0 与第三方组件</string>
+    <string name="settings_about_summary_disclaimer">本应用不提供任何内容</string>
+    <string name="settings_about_app_version">版本</string>
+    <string name="settings_about_app_package">包名</string>
+    <string name="settings_about_app_license">开源协议</string>
+    <string name="settings_about_app_license_value">GPL-3.0</string>
+    <string name="settings_about_app_repo_open">在浏览器中打开项目仓库</string>
+    <string name="settings_about_changelog_body">v1.2.0 · 2026-09-29\n· 无痕模式：开启后不记录，也不显示已有记录\n· 搜索历史：最近 20 条，点击即搜，可单条删除或清空\n· 收藏页长按卡片即可取消收藏\n· 站点可设「不参与搜索」与置顶\n· 设置页新增【关于】：版本、更新日志、开源许可、免责声明\n· 播放页不再显示播放地址与解析状态\n· 单元测试 305 → 333\n\nv1.1.0 · 2026-09-28\n· MVI 分层：界面、状态、数据各归其位\n· 播放器完整交互：手势、自绘控件、自动连播、横屏\n· JS 爬虫引擎（QuickJS）与 pdfh / pdfa 解析\n· 本地代理：支持需要请求头的播放地址\n· 性能：网格触底预取、列表复用、封面缓存\n· 单元测试 89 → 305\n\nv1.0.0 · 2026-09-18\n· 内容源装载：站点、线路、选集\n· 播放、观看进度、收藏（本地数据库）\n· 播放缓存、搜索、深浅色三态\n· GitHub Actions 持续集成与 GPL-3.0 开源</string>
+    <string name="settings_about_license_body">BeeVideo 基于 GNU 通用公共许可证第 3 版（GPL-3.0）发布。你可以自由使用、修改和分发，衍生作品必须以同样的许可证开源。\n\n本应用还包含以下第三方组件：\n\nAndroidX 与 Jetpack Compose —— Apache-2.0\nMedia3 / ExoPlayer —— Apache-2.0\nOkHttp —— Apache-2.0\nCoil —— Apache-2.0\nGson —— Apache-2.0\nRoom —— Apache-2.0\njsoup —— MIT\nNanoHTTPD —— BSD-3-Clause\nQuickJS 的 Android 绑定（wang.harlon.quickjs）—— Apache-2.0\nKotlin、kotlinx.coroutines —— Apache-2.0\n\n各组件版权归其各自所有者所有，完整许可证文本见项目仓库。</string>
+    <string name="settings_about_disclaimer_body">BeeVideo 自身不提供、不存储、不分发、不推荐任何内容。\n\n· 所有内容均由你自行配置的第三方内容源提供，与本应用无关。\n· 内容源的可用性、合法性与安全性均不做保证，请自行判断其来源。\n· 请仅用于观看你有权观看的内容，并遵守你所在地区的法律法规。\n· 无痕模式只影响本机留下什么，不改变对内容源的访问，也不隐藏你的 IP 地址。\n· 本软件按「现状」提供，不附带任何明示或暗示的担保。\n\n因使用本应用产生的任何后果由使用者自行承担。</string>
 
     <!-- 外观 -->
     <string name="settings_section_appearance">外观</string>
@@ -152,15 +196,7 @@
     <string name="player_next">下一集</string>
     <string name="player_section_lines">线路</string>
     <string name="player_section_episodes">选集</string>
-    <string name="player_url_placeholder">—</string>
-    <string name="player_resolving">正在解析播放地址…</string>
-    <string name="player_resolve_failed">取播放地址失败：%1$s</string>
-    <string name="player_resolve_empty">这个源没有给出可播放的地址</string>
-    <string name="player_parse_required">该地址是网页而非媒体流，需要第三方解析服务。本播放器不内置解析服务。</string>
-    <string name="player_error">播放出错：%1$s</string>
-
-    <!-- 播放信息对话框 -->
-    <string name="player_action_info">播放信息</string>
+    <!-- 控制层与手势 -->
     <string name="player_action_play">播放</string>
     <string name="player_action_pause">暂停</string>
     <string name="player_action_fullscreen">全屏</string>
@@ -168,13 +204,4 @@
     <!-- 手势 HUD 的标签。亮度改的是本 App 窗口、音量改的是媒体流，都不落库 -->
     <string name="player_gesture_brightness">亮度</string>
     <string name="player_gesture_volume">音量</string>
-    <string name="player_info_title">播放信息</string>
-    <string name="player_info_line">线路</string>
-    <string name="player_info_episode">剧集</string>
-    <string name="player_info_url">地址</string>
-    <string name="player_info_state">状态</string>
-    <string name="player_state_buffering">缓冲中</string>
-    <string name="player_state_ready">就绪</string>
-    <string name="player_state_ended">本集播完</string>
-    <string name="player_state_error">出错</string>
 </resources>

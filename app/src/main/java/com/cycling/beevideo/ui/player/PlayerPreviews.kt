@@ -31,9 +31,6 @@ private fun PlayerScaffoldPreview() {
                 episodeName = line.episodes[2].name,
                 episodes = line.episodes,
                 currentIndex = 2,
-                statusText = "就绪",
-                urlText = line.episodes[2].url,
-                isBuffering = false,
                 lines = vod.lines,
                 currentLineIndex = 0,
             ),
@@ -42,7 +39,6 @@ private fun PlayerScaffoldPreview() {
             onPrev = {},
             onNext = {},
             onBack = {},
-            onInfoClick = {},
             isFullscreen = false,
             player = { modifier -> Box(modifier.background(PlayerSurface)) },
         )
@@ -69,9 +65,6 @@ private fun PlayerScaffoldFullscreenPreview() {
                 episodeName = line.episodes[2].name,
                 episodes = line.episodes,
                 currentIndex = 2,
-                statusText = "就绪",
-                urlText = line.episodes[2].url,
-                isBuffering = false,
                 lines = vod.lines,
                 currentLineIndex = 0,
             ),
@@ -80,7 +73,6 @@ private fun PlayerScaffoldFullscreenPreview() {
             onPrev = {},
             onNext = {},
             onBack = {},
-            onInfoClick = {},
             isFullscreen = true,
             player = { modifier -> Box(modifier.background(PlayerSurface)) },
         )
@@ -105,40 +97,14 @@ private fun PlayerScaffoldEmptyPreview() {
                 episodeName = "无可播放剧集",
                 episodes = emptyList(),
                 currentIndex = 0,
-                statusText = "这个源没有给出可播放的地址",
-                urlText = "—",
-                isBuffering = false,
             ),
             onSelectLine = {},
             onSelectEpisode = {},
             onPrev = {},
             onNext = {},
             onBack = {},
-            onInfoClick = {},
             isFullscreen = false,
             player = { modifier -> Box(modifier.background(PlayerSurface)) },
-        )
-    }
-}
-
-@Preview(
-    name = "播放信息 · 全屏对话框",
-    group = "页面",
-    showBackground = true,
-    backgroundColor = 0xFF0B0A08,
-    widthDp = 411,
-    heightDp = 891,
-)
-@Composable
-private fun PlayInfoDialogPreview() {
-    BeeVideoTheme(darkTheme = true) {
-        PlayInfoDialog(
-            title = "播放信息",
-            lineName = "线路 1",
-            episodeName = "第 3 集",
-            url = "https://example.com/demo.m3u8",
-            state = "就绪",
-            onDismiss = {},
         )
     }
 }

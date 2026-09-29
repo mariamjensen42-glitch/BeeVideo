@@ -3,6 +3,7 @@ package com.cycling.beevideo.ui.history
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
 
 /**
@@ -12,9 +13,10 @@ import com.cycling.beevideo.domain.repository.LibraryRepository
 class HistoryViewModel(
     library: LibraryRepository,
     sources: ContentSourceRepository,
+    incognito: IncognitoMode,
 ) : ViewModel() {
 
-    private val state = HistoryState(library, sources, scope = viewModelScope)
+    private val state = HistoryState(library, sources, incognito, scope = viewModelScope)
 
     val uiState = state.uiState
     val effect = state.effect

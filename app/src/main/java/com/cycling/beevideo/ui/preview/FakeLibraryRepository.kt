@@ -80,4 +80,8 @@ class FakeLibraryRepository(
         current.value = if (exists) list.filterNot { it.vodId == item.vodId } else list + item
         return !exists
     }
+
+    override suspend fun removeKeep(vodId: String) {
+        current.value = current.value.filterNot { it.vodId == vodId }
+    }
 }

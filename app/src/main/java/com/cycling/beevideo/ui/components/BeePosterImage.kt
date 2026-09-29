@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 
 /**
@@ -26,6 +27,11 @@ import coil.request.ImageRequest
  * 把渐变留在底下更少一层，也更好看（渐变是设计的一部分，不是"图没来"的提示）。
  *
  * `Crop`：海报比例千奇百怪，统一裁切才能让一面墙的卡片边缘对齐。
+ *
+ * ─── 无痕会话 ──────────────────────────────────────────────────────────
+ * 只进内存缓存。封面会落进 Coil 的磁盘缓存，而它**没有按时间挑选的接口** ——
+ * 进了盘就只能整份清掉，那会连用户正常模式攒下的封面一起清。所以无痕期间直接不写，
+ * 退出无痕时清一次内存缓存即可。
  */
 @Composable
 fun BeePosterImage(
@@ -35,13 +41,15 @@ fun BeePosterImage(
 ) {
     if (pic.isEmpty()) return
     val context = LocalContext.current
+    val incognito = LocalIncognito.current
     AsyncImage(
-        // remember(pic, context)：换图或换 context（Activity 重建）时才重建请求；
-        // 每次重组新建会让 Coil 每帧重下一次
-        model = remember(pic, context) {
+        // remember 的 key 要带上 incognito：开关一变，请求的缓存策略跟着变，
+        // 不带的话会一直用着旧策略建好的那个请求
+        model = remember(pic, context, incognito) {
             ImageRequest.Builder(context)
                 .data(pic)
                 .crossfade(true)
+                .diskCachePolicy(if (incognito) CachePolicy.DISABLED else CachePolicy.ENABLED)
                 .build()
         },
         contentDescription = contentDescription,

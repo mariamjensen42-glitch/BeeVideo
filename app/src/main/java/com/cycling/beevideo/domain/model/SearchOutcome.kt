@@ -22,6 +22,13 @@ data class SearchOutcome(
     val searchedSources: Int,
     /** 当前来源里标了可搜索的站点总数。`searchedSources < searchableSources` 即为截断。 */
     val searchableSources: Int,
+    /**
+     * 被用户设成「不参与搜索」的站点数。它们**不在** [searchableSources] 里。
+     *
+     * 与截断同一个理由：这个数字不说出来，用户自己排除了几十个源之后只会看到
+     * "已搜索 10 / 10 个源"，然后以为搜不到是 App 的问题。
+     */
+    val disabledSources: Int = 0,
 ) {
 
     /** 是否因为站点上限而少搜了一部分源。 */
