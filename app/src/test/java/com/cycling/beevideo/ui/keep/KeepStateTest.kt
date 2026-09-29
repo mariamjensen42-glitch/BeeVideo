@@ -75,6 +75,35 @@ class KeepStateTest {
         assertEquals(listOf(KeepEffect.OpenVod("demo:1")), effects)
     }
 
+    @Test
+    fun `菜单里取消收藏，这一页立刻少一张卡`() = runTest {
+        val library = FakeLibraryRepository(keepsFromDemo = true)
+        val state = KeepState(library, backgroundScope)
+        advanceTimeBy(1)
+        val target = PreviewKeeps.items.first()
+
+        state.onIntent(KeepIntent.OnRemoveKeep(target.vodId))
+        advanceTimeBy(1)
+
+        assertTrue(state.uiState.value.keeps.none { it.vodId == target.vodId })
+    }
+
+    /**
+     * 删除**不存在的条目**是无操作。
+     *
+     * 这条钉住"为什么不复用 toggleKeep"：翻转遇到不同步的状态会把条目又加回来，
+     * 而菜单里写的是「取消收藏」，用户看到它出现在列表里会以为是自己点错了。
+     */
+    @Test
+    fun `取消收藏不存在的条目不会把它加回来`() = runTest {
+        val state = keepState()
+
+        state.onIntent(KeepIntent.OnRemoveKeep("demo:1"))
+        advanceTimeBy(1)
+
+        assertTrue(state.uiState.value.keeps.isEmpty())
+    }
+
     // ------------------------------------------------------------------ 夹具
 
     private fun TestScope.keepState(keepsFromDemo: Boolean = false) =

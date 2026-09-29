@@ -1,7 +1,9 @@
 package com.cycling.beevideo.ui.history
 
 import com.cycling.beevideo.domain.repository.ContentSourceRepository
+import com.cycling.beevideo.domain.repository.IncognitoMode
 import com.cycling.beevideo.domain.repository.LibraryRepository
+import com.cycling.beevideo.ui.preview.FakeIncognitoMode
 import com.cycling.beevideo.ui.preview.FakeLibraryRepository
 import com.cycling.beevideo.ui.preview.FakeSourceRepository
 import com.cycling.beevideo.ui.preview.PreviewHistory
@@ -106,15 +108,38 @@ class HistoryStateTest {
         )
     }
 
+    /**
+     * 无痕状态是这一页换空态文案的**唯一依据**：同样是空列表，
+     * 「还没有观看记录」与「无痕模式已开启」说的是两件事（记录变空那一步在仓储里，
+     * 这里只钉住"开关能进来、能来回切"）。
+     */
+    @Test
+    fun `无痕开关落进状态并可来回切换`() = runTest {
+        val incognito = FakeIncognitoMode()
+        val state = historyState(incognito = incognito)
+        advanceTimeBy(1)
+        assertFalse(state.uiState.value.incognito)
+
+        incognito.set(true)
+        advanceTimeBy(1)
+        assertTrue(state.uiState.value.incognito)
+
+        incognito.set(false)
+        advanceTimeBy(1)
+        assertFalse(state.uiState.value.incognito)
+    }
+
     // ------------------------------------------------------------------ 夹具
 
     /** 基准时刻写死，好让收藏记录里的 `createdAt` 在断言里是确定的。 */
     private fun TestScope.historyState(
         library: LibraryRepository = FakeLibraryRepository(),
         sources: ContentSourceRepository = FakeSourceRepository.singleSourceReady(),
+        incognito: IncognitoMode = FakeIncognitoMode(),
     ) = HistoryState(
         library = library,
         sources = sources,
+        incognito = incognito,
         now = { 1_700_000_000_000L },
         scope = backgroundScope,
     )

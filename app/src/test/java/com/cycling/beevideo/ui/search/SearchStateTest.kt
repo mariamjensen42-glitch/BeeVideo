@@ -6,7 +6,9 @@ import com.cycling.beevideo.domain.model.SearchOutcome
 import com.cycling.beevideo.domain.model.Vod
 import com.cycling.beevideo.domain.model.VodPage
 import com.cycling.beevideo.domain.repository.ContentRepository
+import com.cycling.beevideo.domain.repository.SearchHistoryRepository
 import com.cycling.beevideo.ui.components.LoadState
+import com.cycling.beevideo.ui.preview.FakeSearchHistoryRepository
 import com.cycling.beevideo.ui.preview.PreviewVods
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
@@ -146,11 +148,91 @@ class SearchStateTest {
         assertEquals(listOf(SearchEffect.OpenVod(vod), SearchEffect.Back), effects)
     }
 
+    // ------------------------------------------------------------------ 历史
+
+    /**
+     * 记账发生在**发请求之前**：历史记的是"我搜过什么"，不是"什么搜到了"。
+     * 网络失败不该让关键词消失。
+     */
+    @Test
+    fun `提交就写历史，不等结果`() = runTest {
+        val content = RecordingContentRepository().apply { error = IllegalStateException("断了") }
+        val history = FakeSearchHistoryRepository()
+        val state = searchState(content, history)
+
+        state.onIntent(SearchIntent.OnInputChange("庆余年"))
+        state.onIntent(SearchIntent.OnSubmit)
+        advanceTimeBy(1)
+
+        assertEquals(listOf("庆余年"), state.uiState.value.history)
+        assertTrue("失败也不该把词撤回去", state.uiState.value.result is LoadState.Failed)
+    }
+
+    @Test
+    fun `重复的词上移而不是产生两条`() = runTest {
+        val history = FakeSearchHistoryRepository(listOf("庆余年", "繁花"))
+        val state = searchState(history = history)
+
+        state.onIntent(SearchIntent.OnInputChange("繁花"))
+        state.onIntent(SearchIntent.OnSubmit)
+        advanceTimeBy(1)
+
+        assertEquals(listOf("繁花", "庆余年"), state.uiState.value.history)
+    }
+
+    /** 空白词连请求都不发，自然也不该进历史。 */
+    @Test
+    fun `空白词不写历史`() = runTest {
+        val history = FakeSearchHistoryRepository()
+        val state = searchState(history = history)
+
+        state.onIntent(SearchIntent.OnInputChange("   "))
+        state.onIntent(SearchIntent.OnSubmit)
+        advanceTimeBy(1)
+
+        assertTrue(state.uiState.value.history.isEmpty())
+    }
+
+    /** 点历史等同"填进输入框再提交"—— 否则结果有了而输入框空着，像上次的残留。 */
+    @Test
+    fun `点历史即用该词提交且输入框同步`() = runTest {
+        val content = RecordingContentRepository()
+        val state = searchState(content, FakeSearchHistoryRepository(listOf("繁花")))
+
+        state.onIntent(SearchIntent.OnUseHistory("繁花"))
+        advanceTimeBy(1)
+
+        assertEquals("繁花", state.uiState.value.input)
+        assertEquals(listOf("繁花"), content.searchedKeywords)
+        assertEquals("繁花", state.uiState.value.submitted)
+    }
+
+    @Test
+    fun `删一条历史不动别的`() = runTest {
+        val state = searchState(history = FakeSearchHistoryRepository(listOf("繁花", "庆余年")))
+
+        state.onIntent(SearchIntent.OnRemoveHistory("繁花"))
+        advanceTimeBy(1)
+
+        assertEquals(listOf("庆余年"), state.uiState.value.history)
+    }
+
+    @Test
+    fun `清空历史后界面上的列表也空`() = runTest {
+        val state = searchState(history = FakeSearchHistoryRepository(listOf("繁花")))
+
+        state.onIntent(SearchIntent.OnClearHistory)
+        advanceTimeBy(1)
+
+        assertTrue(state.uiState.value.history.isEmpty())
+    }
+
     // ------------------------------------------------------------------ 夹具
 
     private fun TestScope.searchState(
         content: ContentRepository = RecordingContentRepository(),
-    ) = SearchState(content, backgroundScope)
+        history: SearchHistoryRepository = FakeSearchHistoryRepository(),
+    ) = SearchState(content, history, backgroundScope)
 }
 
 /** 记录搜索过的词，并允许把一次搜索卡在半途（看 `Loading` 那一帧）。 */

@@ -176,6 +176,58 @@ class VodContentRepositoryTest {
         assertNull("配置副本也要删掉，否则下次填错地址会「加载成功」成上一个配置", cache.read(CONFIG_URL))
     }
 
+    // ------------------------------------------------------------------ 站点偏好
+
+    /**
+     * 换配置就作废站点偏好。
+     *
+     * 站点 key 会变，而且不同配置里的 key 会撞名 —— 留着会让"我在 A 配置里排除的站"
+     * 在 B 配置里也消失，而两个根本没有关系。
+     */
+    @Test
+    fun `换配置会清掉站点级的偏好`() = runBlocking {
+        val store = FakeSourceStore().apply {
+            configUrl = "https://example.com/old.json"
+            excludedSourceIds = setOf("k")
+            sourceOrder = listOf("k")
+        }
+        val repo = repository(store = store) { CONFIG_TEXT to CONFIG_URL }
+
+        repo.applyConfig(CONFIG_URL)
+
+        assertTrue("排除记录要清掉", store.excludedSourceIds.isEmpty())
+        assertTrue("置顶顺序要清掉", store.sourceOrder.isEmpty())
+        assertEquals(SourcePhase.READY, repo.status.value.phase)
+    }
+
+    /** 恢复上次的配置**不是换配置** —— 否则每次冷启动都会把用户的设置清光。 */
+    @Test
+    fun `恢复同一配置时偏好保留`() = runBlocking {
+        val store = FakeSourceStore().apply {
+            configUrl = CONFIG_URL
+            excludedSourceIds = setOf("k")
+        }
+        val repo = repository(store = store) { CONFIG_TEXT to CONFIG_URL }
+
+        repo.restore()
+
+        assertEquals(setOf("k"), store.excludedSourceIds)
+        assertEquals(setOf("k"), repo.status.value.excludedSourceIds)
+    }
+
+    /** 排除不动当前来源：用户把正在看的站设成不参与搜索，不该被弹到别的站上。 */
+    @Test
+    fun `排除当前来源不会改变当前来源`() = runBlocking {
+        val repo = repository(fetch = { CONFIG_TEXT to CONFIG_URL })
+        repo.applyConfig(CONFIG_URL)
+        val active = repo.status.value.activeSourceId
+
+        repo.setSourceExcluded(active, true)
+
+        assertEquals(active, repo.status.value.activeSourceId)
+        assertTrue(active in repo.status.value.excludedSourceIds)
+    }
+
     // ------------------------------------------------------------------ 夹具
 
     private fun repository(
@@ -197,10 +249,14 @@ class VodContentRepositoryTest {
 private class FakeSourceStore : SourceStore {
     override var configUrl: String = ""
     override var activeSourceId: String = ""
+    override var excludedSourceIds: Set<String> = emptySet()
+    override var sourceOrder: List<String> = emptyList()
 
     override fun clear() {
         configUrl = ""
         activeSourceId = ""
+        excludedSourceIds = emptySet()
+        sourceOrder = emptyList()
     }
 }
 

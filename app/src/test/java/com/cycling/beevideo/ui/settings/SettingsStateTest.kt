@@ -136,6 +136,10 @@ private class RecordingSourceRepository : ContentSourceRepository {
 
     override fun selectSource(sourceId: String) = Unit
 
+    override fun setSourceExcluded(sourceId: String, excluded: Boolean) = Unit
+
+    override fun togglePinSource(sourceId: String) = Unit
+
     override suspend fun clear() {
         clearCount++
     }
