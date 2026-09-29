@@ -216,13 +216,21 @@ def main():
     # ── 1b. 第三方 ABI 差分：**最容易漏的一组** ──────────────────────────
     # 这一组是 2026-09-16 第一版 release 的实际事故现场，见文件头说明。
     tp_missing, tp_raw = diff_surface(dbg_t, rel_t)
-    # `<clinit>` 单独归为「已知例外」：R8 只在证明「没有活着的读」之后才会删它，
-    # 实测被删的那个是常量传播后变空的（okio.internal._ZlibJvmKt 的
-    # DEFAULT_COMPRESSION 被内联成 -1，`<clinit>` 随之没内容）。
-    # ⚠️ 这条**没法用 keep 规则堵**：R8 的成员语法不接受裸 `<clinit>;`
-    #    （报 Expected char '('），写了 `<clinit>();` 也依然被删 —— 所以只能记录。
-    tp_clinit = [m for m in tp_raw if m.endswith(".<clinit>()V")]
-    tp_lost = [m for m in tp_raw if not m.endswith(".<clinit>()V")]
+    # 两类**已知例外**，都归 ℹ️ 而不是 ❌：
+    #   · 合成成员（lambda 去糖）—— 与 1d / 2c 同一判据（`is_synthetic_member`）。
+    #     实测触发它的是 `okhttp3.internal.Util$$ExternalSyntheticLambda0.<init>`：
+    #     R8 把那个 lambda **内联回调用方**之后，承载它的合成类自然消失，行为不变。
+    #     名字是编译器产物（换个编译器版本就变），预编译 jar 不可能按名字引用它。
+    #   · `<clinit>` —— R8 只在证明「没有活着的读」之后才删它，而且**没法用 keep 规则堵**
+    #     （成员语法不接受裸 `<clinit>;`）。实测被删的那个是常量传播后变空的
+    #     （okio.internal._ZlibJvmKt 的 DEFAULT_COMPRESSION 被内联成 -1）。
+    #
+    # ⚠️ 这一段的严格度**不是** ABI 保护的主力：真正会炸的是非合成成员
+    #     （`ConnectionPool.<init>` 那一类，见 §4 的事故记录），而它们既在下面的差集里，
+    #     也被 1c 点名锚着。把合成成员算进来只会让正常构建每天报一次假警 ——
+    #     而假警报会训练人忽略这个 job，那才是最贵的代价。
+    tp_synth = [m for m in tp_raw if is_synthetic_member(m)]
+    tp_lost = [m for m in tp_raw if not is_synthetic_member(m)]
 
     print("\n── 1b. 第三方库 ABI 差分（okhttp3 / okio / gson）──")
     if not tp_missing and not tp_lost:
@@ -234,8 +242,8 @@ def main():
             print("   ❌ 成员没了:", m)
         if len(tp_lost) > 40:
             print(f"   … 另有 {len(tp_lost) - 40} 项")
-    for m in tp_clinit:
-        print(f"   ℹ️  已知例外（R8 删空的 <clinit>，无法用规则堵）: {m}")
+    for m in tp_synth:
+        print(f"   ℹ️  已知例外（合成成员 / 空 <clinit>，无外部调用方）: {m}")
 
     # 点名确认：这几个正是第一版 release 里消失、真机一拉首页就炸的成员
     print("\n── 1c. 点名确认第三方锚点方法 ──")
